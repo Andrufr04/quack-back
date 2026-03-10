@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.utils import timezone
 from profiles.models import Person, Profile
 from education.models import StudyGroup, Student, Subject, Task, TaskType
@@ -18,7 +19,10 @@ class Command(BaseCommand):
         task_type, _ = TaskType.objects.get_or_create(name="Практична робота")
 
         persons = []
-        curator_profile = None
+        curator_user = None
+
+        roles_names = ["student", "teacher", "curator", "administration", "founder", "parent"]
+        roles = [Group.objects.get_or_create(name=name)[0] for name in roles_names]
 
         for i in range(1, 10):
             email = f"user{i}@test.com"
@@ -44,19 +48,25 @@ class Command(BaseCommand):
 
             profile, _ = Profile.objects.get_or_create(
                 person=person,
-                defaults={'description': f"Профіль користувача {email}"}
+                defaults={'description': "Цей користувач найкрутіший на платформі Quack. Його багатозначна задача — це створювати максимально круті речі та ламати систему."}
             )
 
             if email == "user1@test.com":
-                curator_profile = profile
+                curator_user = user
 
-        self.stdout.write(self.style.SUCCESS("Users, Persons, and Profiles created."))
+            
+            user.groups.add(roles[1] if user.email == "user1@test.com" else roles[0])
+            
+
+            
+
+        self.stdout.write(self.style.SUCCESS("Users, Persons, Roles and Profiles created."))
 
         group, _ = StudyGroup.objects.get_or_create(
             name="КНП-67",
-            defaults={'curator': curator_profile}
+            defaults={'curator': curator_user}
         )
-        self.stdout.write(self.style.SUCCESS(f"Group {group.name} created with curator {curator_profile.person.surname}."))
+        self.stdout.write(self.style.SUCCESS(f"Group {group.name} created with curator."))
 
         for person in persons[1:]:
             Student.objects.get_or_create(

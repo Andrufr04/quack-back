@@ -13,7 +13,7 @@ class Person(models.Model):
 class Profile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     person = models.ForeignKey(Person, on_delete=models.CASCADE)
-    description = models.TextField(null=True, blank=True)
+    description = models.CharField(max_length=512, null=True, blank=True)
     
     profile_picture = models.ImageField(upload_to='avatars/', null=True, blank=True)
     banner_picture = models.ImageField(upload_to='banners/', null=True, blank=True)

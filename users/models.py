@@ -17,6 +17,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
     email_code = models.CharField(max_length=6, null=True, blank=True)
+    email_code_iat = models.DateTimeField(null = True, blank = True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     last_password_change = models.DateTimeField(null=True, blank=True)
 
@@ -26,12 +27,3 @@ class User(AbstractBaseUser, PermissionsMixin):
     objects = UserManager()
 
     USERNAME_FIELD = "email"
-
-class Role(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=100)
-
-class UserAccess(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    role = models.ForeignKey(Role, on_delete=models.CASCADE)

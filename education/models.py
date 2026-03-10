@@ -1,11 +1,12 @@
 import uuid
 from django.db import models
-from profiles.models import Person, Profile
+from django.conf import settings
+from profiles.models import Person
 
 class StudyGroup(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
-    curator = models.ForeignKey(Profile, on_delete=models.SET_NULL, null=True, blank=True)
+    curator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='managed_groups', limit_choices_to={'groups__name': "Curator"})
 
 class Student(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

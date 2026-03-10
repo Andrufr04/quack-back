@@ -2,6 +2,7 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 from pathlib import Path
+from corsheaders.defaults import default_headers
 
 load_dotenv()
 
@@ -34,6 +35,10 @@ INSTALLED_APPS = [
     'users',
     'profiles',
     'education'
+]
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-active-role",
 ]
 
 CORS_ALLOWED_ORIGINS = [
@@ -89,12 +94,8 @@ REST_FRAMEWORK = {
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
-    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=10),
+    'REFRESH_TOKEN_LIFETIME': timedelta(minutes=30),
 }
-
-
-# Password validation
-# https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
