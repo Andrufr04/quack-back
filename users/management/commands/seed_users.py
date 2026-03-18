@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.utils import timezone
 from profiles.models import Person, Profile
-from education.models import StudyGroup, Student, Subject, Task, TaskType
+from education.models import StudyGroup, Student, Subject, Task, TaskType, Teacher
 
 User = get_user_model()
 
@@ -56,9 +56,9 @@ class Command(BaseCommand):
 
             
             user.groups.add(roles[1] if user.email == "user1@test.com" else roles[0])
-            
 
-            
+            if user.email == "user1@test.com":
+                user.groups.add(roles[3])
 
         self.stdout.write(self.style.SUCCESS("Users, Persons, Roles and Profiles created."))
 
@@ -73,23 +73,16 @@ class Command(BaseCommand):
                 person=person,
                 study_group=group
             )
-        self.stdout.write(self.style.SUCCESS("Students assigned to the group."))
+        teacher_person = persons[0] 
 
-        subject_names = ["Основи управління проектами. Командний проект.", "Фізика"]
-        subjects = [Subject.objects.get_or_create(name=name)[0] for name in subject_names]
-        self.stdout.write(self.style.SUCCESS("Subjects created."))
-
-        start_dt = timezone.make_aware(datetime(2026, 3, 2, 5, 0, 0))
-        end_dt = timezone.make_aware(datetime(2026, 3, 4, 16, 0, 0))
-
-        Task.objects.get_or_create(
-            study_group=group,
-            subject=subjects[0],
-            theme="Тема найкрутішого завдання",
+        teacher, created = Teacher.objects.get_or_create(
+            person=teacher_person,
             defaults={
-                'description': "Опис найкрутішого завдання",
-                'start': start_dt,
-                'end': end_dt
+                'teaching_group': group
             }
         )
-        self.stdout.write(self.style.SUCCESS("Task created successfully!"))
+        self.stdout.write(self.style.SUCCESS("Students and teacher assigned to the group."))
+
+        subject_names = ["Основи управління проектами. Командний проект.", "Фізика", "Біологія", "C#"]
+        subjects = [Subject.objects.get_or_create(name=name)[0] for name in subject_names]
+        self.stdout.write(self.style.SUCCESS("Subjects created."))

@@ -14,7 +14,7 @@ class MyProfileView(APIView):
     # return [IsAuthenticated(), (IsStudent() | IsTeacher()), ~IsAdministration()]
 
     def get_permissions(self):
-        if self.request.method == 'PATCH':
+        if self.request.method == 'POST':
             return [IsAuthenticated(), IsTeacher()]
         return [IsAuthenticated()]
 

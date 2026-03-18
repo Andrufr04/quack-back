@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Task, Subject, TaskType
+from .models import Lesson, Task, Subject, TaskType
 
 class TaskSerializer(serializers.ModelSerializer):
     subject_name = serializers.CharField(source='subject.name', read_only=True)
@@ -16,3 +16,8 @@ class TaskSerializer(serializers.ModelSerializer):
             'start', 
             'end'
         ]
+
+class LessonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Lesson
+        fields = '__all__' # Або перелічи конкретні поля: ['teacher', 'classroom', 'start_time', 'end_time']

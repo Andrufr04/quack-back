@@ -10,6 +10,9 @@ class Person(models.Model):
     patronymic = models.CharField(max_length=100, null=True, blank=True)
     birthdate = models.DateField()
 
+    def get_full_name(self):
+        return f"{self.name} {self.surname}"
+
 class Profile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     person = models.ForeignKey(Person, on_delete=models.CASCADE)

@@ -6,6 +6,5 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token = super().get_token(user)
 
         token['roles'] = list(user.groups.values_list('name', flat=True))
-        # token['full_name'] = f"{user.person.name} {user.person.surname}"
         
         return token

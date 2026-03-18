@@ -27,3 +27,6 @@ class User(AbstractBaseUser, PermissionsMixin):
     objects = UserManager()
 
     USERNAME_FIELD = "email"
+
+    def get_full_name(self):
+        return f"{self.person.name} {self.person.surname}"
