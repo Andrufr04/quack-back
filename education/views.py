@@ -1,3 +1,4 @@
+from django.forms import ValidationError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -7,17 +8,27 @@ from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics
+from django.db.models import Avg, Sum, Value, FloatField
+from django.db.models.functions import Coalesce
+from datetime import datetime, timedelta
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 from education.serializers import LessonSerializer
 from django.contrib.auth import get_user_model
 
 from .models import (
-    Lesson, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
+    Attendance, Lesson, LessonDuck, LessonMark, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
     Student, StudyGroup, Subject, AttachmentGroup, AttachmentFile, TaskType
 )
 from users.permissions import IsAdministration, IsTeacher, IsStudent, IsCurator
 
 User = get_user_model()
+
+def check_lesson_started(lesson):
+    # Дозволяємо редагування, якщо поточний час >= часу початку пари
+    if timezone.now() < lesson.start_time:
+        raise ValidationError("Ви не можете редагувати дані пари, яка ще не почалася.")
 
 class CreateTaskView(APIView):
     permission_classes = [IsAuthenticated, IsTeacher]
@@ -49,6 +60,28 @@ class CreateTaskView(APIView):
             TaskStatus.objects.bulk_create([
                 TaskStatus(task=task, student=student, status=0) for student in students
             ])
+
+            try:
+                channel_layer = get_channel_layer()
+                # Назва кімнати має ТОЧНО збігатися з тією, що в consumers.py
+                room_name = f'group_{task.study_group_id}'
+                
+                # Відправляємо повідомлення в кімнату
+                async_to_sync(channel_layer.group_send)(
+                    room_name,
+                    {
+                        # 'type' вказує, яку функцію викликати у NotificationConsumer
+                        'type': 'send_notification', 
+                        'message': f'Нове завдання: {task.subject.name}',
+                        'task_data': {
+                            'theme': task.theme,
+                        }
+                    }
+                )
+            except Exception as e:
+                # Робимо try/except, щоб якщо сокети впадуть, 
+                # завдання все одно збереглося і вчитель не отримав помилку 500
+                print(f"Помилка відправки WebSocket: {e}")
             
             return Response({"id": task.id}, status=status.HTTP_201_CREATED)
         
@@ -56,14 +89,13 @@ class TeacherGroupsView(APIView):
     permission_classes = [IsAuthenticated, IsTeacher]
     
     def get(self, request):
-        # Отримуємо вчителя через його Person та User
-        try:
-            teacher = Teacher.objects.get(person__user=request.user)
-            group = teacher.teaching_group
-            # Повертаємо масив, навіть якщо там одна група, щоб фронтенд працював універсально
-            return Response([{"id": group.id, "name": group.name}])
-        except Teacher.DoesNotExist:
-            return Response([], status=404)
+        # Отримуємо всі унікальні групи, в яких у цього юзера є хоча б одна пара
+        groups = StudyGroup.objects.filter(
+            lessons__teacher=request.user
+        ).distinct()
+        
+        data = [{"id": str(g.id), "name": g.name} for g in groups]
+        return Response(data)
 
 class TasksTypeView(APIView):
     permission_classes = [IsAuthenticated]
@@ -77,16 +109,21 @@ class TeacherSubjectsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        is_admin = request.user.groups.filter(name='Administration').exists()
         group_id = request.query_params.get('group_id')
+        user = request.user
 
-        if is_admin:
+        # Якщо адмін — бачить все
+        if user.groups.filter(name='administration').exists():
             subjects = Subject.objects.all()
+        # Якщо вчитель і вибрана група — бачить тільки свої предмети в цій групі
+        elif group_id:
+            subjects = Subject.objects.filter(
+                lesson__teacher=user,
+                lesson__study_group_id=group_id
+            ).distinct()
+        # В іншому випадку — просто всі предмети, де він вказаний як викладач
         else:
-            if not group_id:
-                return Response([], status=200)
-            
-            subjects = Subject.objects.all() 
+            subjects = Subject.objects.filter(lesson__teacher=user).distinct()
 
         data = [{"id": str(s.id), "name": s.name} for s in subjects]
         return Response(data)
@@ -184,9 +221,6 @@ class StudentTasksView(APIView):
                     files_list = []
                     for f in task_obj.attachments.files.all():
                         url = request.build_absolute_uri(f.file.url)
-                        
-                        if not settings.DEBUG and url.startswith('http://'):
-                            url = url.replace('http://', 'https://', 1)
                             
                         files_list.append({
                             "id": str(f.id),
@@ -293,10 +327,6 @@ class TeacherTasksToCheckView(APIView):
                     files_list = []
                     for f in work.attachments.files.all():
                         file_url = request.build_absolute_uri(f.file.url)
-                        # Фікс Mixed Content
-                        if '127.0.0.1' not in file_url and 'localhost' not in file_url:
-                            if 'quackdemo.duckdns.org' in file_url:
-                                file_url = file_url.replace('http://', 'https://')
                         
                         files_list.append({
                             "id": str(f.id),
@@ -484,7 +514,7 @@ class AdminStudyGroupView(APIView):
         } for g in groups]
 
         # 2. Отримуємо список усіх кураторів для селектора
-        curators = User.objects.filter(groups__name="сurator").select_related('person')
+        curators = User.objects.filter(groups__name="curator").select_related('person')
         curators_data = [{
             "id": str(c.id),
             "full_name": c.person.get_full_name() if hasattr(c, 'person') else c.email
@@ -514,3 +544,252 @@ class AdminStudyGroupView(APIView):
             
         group.save()
         return Response({"status": "updated"})
+    
+# Отримання пар вчителя на сьогодні
+class TeacherLessonsTodayView(APIView):
+    def get(self, request):
+        today = timezone.now().date()
+        lessons = Lesson.objects.filter(
+            teacher=request.user,
+            start_time__date=today
+        ).select_related('study_group', 'subject')
+        
+        data = [{
+            "id": str(l.id),
+            "study_group_name": l.study_group.name,
+            "subject_name": l.subject.name,
+            "start_time": l.start_time,
+            "end_time": l.end_time,
+            "theme": l.theme # Переконайся, що додав це поле в модель Lesson (нижче допишу)
+        } for l in lessons]
+        return Response(data)
+
+# Студенти групи з їхніми статусами по конкретній парі
+class LessonStudentsView(APIView):
+    def get(self, request, lesson_id):
+        lesson = get_object_or_404(Lesson, id=lesson_id)
+        students = Student.objects.filter(study_group=lesson.study_group).select_related('person')
+        
+        ducks_map = set(LessonDuck.objects.filter(lesson=lesson).values_list('student_id', flat=True))
+        attendance_map = {a.student_id: a.status for a in Attendance.objects.filter(lesson=lesson)}
+        
+        # Додаємо мапу оцінок
+        marks_map = {m.student_id: m.grade for m in LessonMark.objects.filter(lesson=lesson)}
+        
+        data = []
+        for s in students:
+            data.append({
+                "id": str(s.id),
+                "full_name": s.person.get_full_name(),
+                "attendance_status": attendance_map.get(s.id, None),
+                "duck_active": s.id in ducks_map,
+                "grade": marks_map.get(s.id, None) # Віддаємо оцінку
+            })
+        return Response({"students": data})
+
+# Оновлення теми пари (onBlur)
+class UpdateLessonThemeView(APIView):
+    def post(self, request, lesson_id):
+        lesson = get_object_or_404(Lesson, id=lesson_id)
+        
+        lesson.theme = request.data.get('theme', '')
+        lesson.save()
+        return Response({"status": "success"})
+
+# Відвідуваність
+class SetAttendanceView(APIView):
+    def post(self, request):
+        lesson_id = request.data.get('lesson_id')
+        student_id = request.data.get('student_id')
+        status_val = request.data.get('status')
+
+        lesson = get_object_or_404(Lesson, id=lesson_id)
+        
+        # Перевірка часу
+        if timezone.now() < lesson.start_time:
+            return Response(
+                {"error": "badtime"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        attendance, created = Attendance.objects.update_or_create(
+            lesson_id=lesson_id, student_id=student_id,
+            defaults={'status': status_val}
+        )
+        return Response({"status": "ok"})
+
+# Оцінка за пару + Coins
+class GradeLessonStudentView(APIView):
+    def post(self, request):
+        student_id = request.data.get('student_id')
+        lesson_id = request.data.get('lesson_id')
+        grade_val = request.data.get('grade')
+
+        if not all([student_id, lesson_id, grade_val]):
+            return Response({"error": "Missing data"}, status=status.HTTP_400_BAD_REQUEST)
+
+        lesson = get_object_or_404(Lesson, id=lesson_id)
+        student = get_object_or_404(Student, id=student_id)
+
+        if timezone.now() < lesson.start_time:
+            return Response({"error": "badtime"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Створюємо або оновлюємо оцінку
+        mark, created = LessonMark.objects.update_or_create(
+            lesson=lesson, 
+            student=student,
+            defaults={'grade': int(grade_val)}
+        )
+
+        # Опціонально: оновлюємо загальний баланс монет студента
+        # (Наприклад, додаємо тільки якщо це нова оцінка, або різницю)
+        # student.coins += int(grade_val) 
+        # student.save()
+
+        return Response({"status": "success", "grade": mark.grade})
+
+# Заохочення (Ducks)
+class ToggleDuckView(APIView):
+    # Додаємо аргументи після request
+    def post(self, request, lesson_id, student_id): 
+        lesson = get_object_or_404(Lesson, id=lesson_id)
+        student = get_object_or_404(Student, id=student_id)
+
+        if timezone.now() < lesson.start_time:
+            return Response(
+                {"error": "badtime"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )    
+        
+        # Шукаємо, чи вже є качка за цю пару цьому студенту
+        duck_query = LessonDuck.objects.filter(lesson=lesson, student=student)
+        
+        if duck_query.exists():
+            # Якщо є — забираємо
+            duck_query.delete()
+            if student.ducks > 0:
+                student.ducks -= 1
+            active = False
+        else:
+            # Якщо немає — створюємо
+            LessonDuck.objects.create(lesson=lesson, student=student)
+            student.ducks += 1
+            active = True
+            
+        student.save()
+        
+        return Response({
+            "active": active, 
+            "total_ducks": student.ducks
+        }, status=status.HTTP_200_OK)
+    
+class StudentDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def get(self, request):
+        # 1. Отримуємо студента з усіма потрібними зв'язками одним махом
+        student = get_object_or_404(
+            Student.objects.select_related('study_group', 'person'), 
+            person__user=request.user
+        )
+        group = student.study_group
+
+        # 2. Рахуємо особисту статистику
+        task_sum = TaskChecked.objects.filter(student=student).aggregate(s=Sum('mark'))['s'] or 0
+        lesson_sum = LessonMark.objects.filter(student=student).aggregate(s=Sum('grade'))['s'] or 0
+        total_coins = task_sum + lesson_sum
+
+        all_marks = list(TaskChecked.objects.filter(student=student).values_list('mark', flat=True)) + \
+                    list(LessonMark.objects.filter(student=student).values_list('grade', flat=True))
+        avg_grade = sum(all_marks) / len(all_marks) if all_marks else 0.0
+
+        # 3. Формуємо відповідь
+        response_data = {
+            "group_name": group.name if group else None,
+            "my_stats": {
+                "ducks": student.ducks,
+                "coins": total_coins,
+                "average_grade": round(float(avg_grade), 1)
+            },
+            "leaderboard": []
+        }
+
+        # 4. Лідерборд рахуємо ТІЛЬКИ якщо є група
+        if group:
+            # Оптимізація: використовуємо анотації, щоб порахувати все одним запитом до БД
+            # замість того, щоб робити запити в циклі for
+            group_students = Student.objects.filter(study_group=group).select_related('person').annotate(
+                task_score=Coalesce(Sum('taskchecked__mark'), Value(0)),
+                lesson_score=Coalesce(Sum('lesson_marks__grade'), Value(0))
+            )
+
+            leaderboard = []
+            for s in group_students:
+                s_total_coins = s.task_score + s.lesson_score
+                leaderboard.append({
+                    "id": str(s.id),
+                    "full_name": s.person.get_full_name(),
+                    "coins": s_total_coins,
+                    "ducks": s.ducks
+                })
+
+            response_data["leaderboard"] = sorted(leaderboard, key=lambda x: x['coins'], reverse=True)[:10]
+
+        return Response(response_data)
+
+class CalendarLessonsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        # Отримуємо дату від фронта (наприклад, 2024-05-20), або беремо сьогодні
+        date_str = request.query_params.get('date')
+        if date_str:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        else:
+            target_date = timezone.now().date()
+
+        # Знаходимо початок тижня (Неділя як у GitHub)
+        # weekday() в Python: 0=Пн, ..., 6=Нд. 
+        # Якщо сьогодні Нд(6), нам треба відняти 0 днів. Якщо Пн(0) — відняти 1.
+        days_to_subtract = (target_date.weekday() + 1) % 7
+        start_of_week = target_date - timedelta(days=days_to_subtract)
+        end_of_week = start_of_week + timedelta(days=7)
+
+        lessons_query = Lesson.objects.filter(
+            start_time__date__gte=start_of_week,
+            start_time__date__lt=end_of_week
+        ).select_related('subject', 'study_group', 'lesson_type')
+
+        # Фільтрація по ролі (як у тебе було)
+        person = getattr(request.user, 'person', None)
+        if hasattr(person, 'student') and request.headers.get('X-Active-Role') == 'student':
+            lessons_query = lessons_query.filter(study_group=person.student.study_group)
+        else:
+            lessons_query = lessons_query.filter(teacher=request.user)
+
+        data = []
+        for l in lessons_query:
+            # 1. Конвертуємо час з UTC у Київський (локальний)
+            local_start = timezone.localtime(l.start_time)
+            local_end = timezone.localtime(l.end_time)
+
+            # 2. Вирішуємо конфлікт днів тижня між Python та JS
+            # У Python: Пн = 0, Нд = 6
+            # У JavaScript (на твоєму фронті): Нд = 0, Пн = 1
+            js_day = (local_start.weekday() + 1) % 7
+
+            data.append({
+                "id": str(l.id),
+                "title": l.subject.name,
+                "type": l.lesson_type.name if l.lesson_type else "Заняття",
+                
+                # 3. Використовуємо вже конвертований локальний час
+                "start": local_start.strftime("%H:%M"),
+                "end": local_end.strftime("%H:%M"),
+                
+                # Віддаємо день у форматі, який очікує фронтенд
+                "day": js_day, 
+                "date": local_start.date().isoformat()
+            })
+        
+        return Response(data)

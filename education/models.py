@@ -24,16 +24,18 @@ class StudyGroup(models.Model):
 class Student(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     person = models.OneToOneField(Person, on_delete=models.CASCADE)
-    study_group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE)
-
-class Teacher(models.Model): #todo:remove
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    person = models.OneToOneField(Person, on_delete=models.CASCADE)
-    teaching_group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE)
+    study_group = models.ForeignKey(StudyGroup, on_delete=models.SET_NULL, null=True, blank=True)
+    coins = models.IntegerField(default=0)
+    ducks = models.IntegerField(default=0)
 
 class Subject(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=150)
+
+class Teacher(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    person = models.OneToOneField(Person, on_delete=models.CASCADE)
+    subjects = models.ManyToManyField(Subject, blank=True, related_name='qualified_teachers')
 
 class TaskType(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -47,8 +49,8 @@ class Task(models.Model):
     theme = models.CharField(max_length=255)
     description = models.TextField(null=True, blank=True)
     task_type = models.ForeignKey(TaskType, on_delete=models.SET_NULL, null=True, blank=True)
-    start = models.DateField(auto_now_add=True)
-    end = models.DateField()
+    start = models.DateTimeField(auto_now_add=True)
+    end = models.DateTimeField()
     attachments = models.ForeignKey(AttachmentGroup, on_delete=models.SET_NULL, null=True, blank=True)
 
 class TaskStatus(models.Model):
@@ -87,6 +89,7 @@ class Lesson(models.Model):
     study_group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE, related_name='lessons')
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='lessons')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
+    theme = models.CharField(max_length=200, blank=True, null=True) 
     lesson_type = models.ForeignKey(TaskType, on_delete=models.SET_NULL, null=True, blank=True) # Напр. "Лекція"
     
     start_time = models.DateTimeField()
@@ -100,3 +103,34 @@ class Lesson(models.Model):
 
     def __str__(self):
         return f"{self.subject.name} - {self.study_group.name}"
+
+class Attendance(models.Model):
+    ATTENDANCE_CHOICES = [
+        (0, 'absnt'),
+        (1, 'present'),
+        (2, 'late'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='attendances')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE)
+    status = models.IntegerField(choices=ATTENDANCE_CHOICES, default=1)
+
+    class Meta:
+        unique_together = ('lesson', 'student')
+
+class LessonDuck(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='ducks_given')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ('lesson', 'student')
+
+class LessonMark(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name='marks')
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='lesson_marks')
+    grade = models.PositiveSmallIntegerField()
+
+    class Meta:
+        unique_together = ('lesson', 'student') # Одна оцінка для студента за одну пару

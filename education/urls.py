@@ -1,8 +1,8 @@
 from django.urls import path
 from .views import (
-    AdminStudyGroupView, AllGroupsView, AllTeachersView, CreateLessonView, CreateTaskView, LessonDetailView, LessonListFilteringView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherSubjectsView, 
+    AdminStudyGroupView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, SetAttendanceView, StudentDashboardStatsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
     TeacherTasksToCheckView, GradeTaskView,
-    StudentTasksView, SubmitTaskWorkView
+    StudentTasksView, SubmitTaskWorkView, ToggleDuckView, UpdateLessonThemeView
 )
 
 app_name = 'education'
@@ -18,6 +18,14 @@ urlpatterns = [
     path('tasks/grade/<uuid:submission_id>/', GradeTaskView.as_view(), name='task-grade'),
     
     path('teacher/current-lesson/', TeacherCurrentLessonView.as_view()),
+    path('teacher/lessons-today/', TeacherLessonsTodayView.as_view()),
+    path('lessons/<uuid:lesson_id>/students/', LessonStudentsView.as_view()),
+    path('lessons/<uuid:lesson_id>/update-theme/', UpdateLessonThemeView.as_view()),
+    path('lessons/<uuid:lesson_id>/students/<uuid:student_id>/toggle-duck/', ToggleDuckView.as_view()),
+    path('attendance/', SetAttendanceView.as_view()),
+    path('grade-student/', GradeLessonStudentView.as_view()),
+
+    path('calendar/lessons/', CalendarLessonsView.as_view(), name='calendar-lessons'),
 
     # Завдання (Student)
     path('tasks/my-tasks/', StudentTasksView.as_view(), name='student-tasks'),
@@ -33,4 +41,6 @@ urlpatterns = [
 
     path('groups/', AdminStudyGroupView.as_view(), name='admin-groups'),
     path('groups/<uuid:pk>/', AdminStudyGroupView.as_view(), name='admin-group-detail'),
+    
+    path('student/dashboard-stats/', StudentDashboardStatsView.as_view(), name='student-stats'),
 ]
