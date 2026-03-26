@@ -17,6 +17,8 @@ from asgiref.sync import async_to_sync
 from education.serializers import LessonSerializer
 from django.contrib.auth import get_user_model
 
+from notifications.services import create_and_send_notification
+
 from .models import (
     Attendance, Lesson, LessonDuck, LessonMark, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
     Student, StudyGroup, Subject, AttachmentGroup, AttachmentFile, TaskType
@@ -56,32 +58,36 @@ class CreateTaskView(APIView):
             )
 
             # 3. Розсилка статусів студентам групи
-            students = Student.objects.filter(study_group_id=task.study_group_id)
-            TaskStatus.objects.bulk_create([
-                TaskStatus(task=task, student=student, status=0) for student in students
-            ])
+            students = Student.objects.filter(study_group=task.study_group)
 
-            try:
-                channel_layer = get_channel_layer()
-                # Назва кімнати має ТОЧНО збігатися з тією, що в consumers.py
-                room_name = f'group_{task.study_group_id}'
-                
-                # Відправляємо повідомлення в кімнату
-                async_to_sync(channel_layer.group_send)(
-                    room_name,
-                    {
-                        # 'type' вказує, яку функцію викликати у NotificationConsumer
-                        'type': 'send_notification', 
-                        'message': f'Нове завдання: {task.subject.name}',
-                        'task_data': {
-                            'theme': task.theme,
-                        }
-                    }
+            end_date = task.end
+            if isinstance(end_date, str):
+                # Перетворюємо рядок "2026-03-30" (стандарт з HTML-інпута) на "30.03.2026"
+                # Якщо формат відрізняється, беремо просто перші 10 символів
+                try:
+                    formatted_deadline = datetime.strptime(end_date[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+                except ValueError:
+                    formatted_deadline = end_date # Фолбек, якщо щось піде не так
+            else:
+                formatted_deadline = end_date.strftime('%d.%m.%Y')
+            
+            # Відправляємо кожному
+            for student in students:
+                TaskStatus.objects.create(
+                    task=task,
+                    student=student,
+                    status=0 # 0 = 'Нове/Не виконано'
                 )
-            except Exception as e:
-                # Робимо try/except, щоб якщо сокети впадуть, 
-                # завдання все одно збереглося і вчитель не отримав помилку 500
-                print(f"Помилка відправки WebSocket: {e}")
+                try:
+                    create_and_send_notification(
+                        recipient=student.person.user,
+                        title=f"Нове завдання: {task.subject.name}",
+                        message=f"Викладач додав нове завдання з теми: {task.theme}.",
+                        category='education',
+                        related_id=str(task.id)
+                    )
+                except Exception as e:
+                    print(f"Помилка відправки сповіщення: {e}")
             
             return Response({"id": task.id}, status=status.HTTP_201_CREATED)
         
@@ -180,7 +186,6 @@ class GradeTaskView(APIView):
             return Response({"error": "Mark is required"}, status=400)
 
         with transaction.atomic():
-            # Створюємо запис БЕЗ аргументу teacher, бо його немає в моделі
             TaskChecked.objects.create(
                 task=submission.task,
                 student=submission.student,
@@ -188,14 +193,30 @@ class GradeTaskView(APIView):
                 comment=comment
             )
             
-            # Оновлюємо статус на "Перевірено"
             TaskStatus.objects.filter(
                 task=submission.task, 
                 student=submission.student
             ).update(status=2)
             
+            # 🔥 Зберігаємо дані для сповіщення ПЕРЕД тим, як видалити submission
+            student_user = submission.student.person.user
+            task_theme = submission.task.theme
+            task_id = submission.task.id
+            
             # Видаляємо з черги на перевірку
             submission.delete()
+            
+            # 🔥 ВІДПРАВЛЯЄМО СПОВІЩЕННЯ СТУДЕНТУ 🔥
+            try:
+                create_and_send_notification(
+                    recipient=student_user,
+                    title="Роботу оцінено!",
+                    message=f"Викладач виставив {mark} балів за завдання '{task_theme}'.",
+                    category='education',
+                    related_id=str(task_id)
+                )
+            except Exception as e:
+                print(f"Помилка відправки сповіщення: {e}")
             
             return Response({"status": "graded"}, status=201)
         
@@ -268,34 +289,44 @@ class SubmitTaskWorkView(APIView):
     
     def post(self, request):
         with transaction.atomic():
-            # Отримуємо студента
             student = get_object_or_404(Student, person__user=request.user)
             task_id = request.data.get('task_id')
             
-            # Перевір, що саме шле фронт! 
-            # Якщо в логах було "file", то використовуй 'file'
+            # 🔥 Дістаємо саме завдання, щоб знати, кому відправляти сповіщення (автору)
+            task = get_object_or_404(Task, id=task_id)
+            
             files = request.FILES.getlist('file') or request.FILES.getlist('attachments')
             
             att_group = None
             if files:
-                # Створюємо групу вкладень
                 att_group = AttachmentGroup.objects.create()
                 for f in files:
                     AttachmentFile.objects.create(group=att_group, file=f)
 
-            # Створюємо запис на перевірку
             TaskOnCheck.objects.create(
                 task_id=task_id,
                 student=student,
                 text=request.data.get('text', ''),
-                attachments=att_group  # Тепер тут буде ID групи, якщо файли були
+                attachments=att_group  
             )
 
-            # Оновлюємо статус на 1 (На перевірці)
             TaskStatus.objects.filter(
                 task_id=task_id, 
                 student=student
             ).update(status=1)
+
+            # 🔥 ВІДПРАВЛЯЄМО СПОВІЩЕННЯ ВЧИТЕЛЮ 🔥
+            try:
+                student_name = f"{student.person.name} {student.person.surname}"
+                create_and_send_notification(
+                    recipient=task.author, # Автор завдання - це наш вчитель
+                    title="Нова робота на перевірку!",
+                    message=f"Студент {student_name} здав роботу з теми '{task.theme}'.",
+                    category='education',
+                    related_id=str(task.id)
+                )
+            except Exception as e:
+                print(f"Помилка відправки сповіщення: {e}")
 
             return Response({"status": "submitted"}, status=status.HTTP_201_CREATED)
         
@@ -682,19 +713,19 @@ class ToggleDuckView(APIView):
             "active": active, 
             "total_ducks": student.ducks
         }, status=status.HTTP_200_OK)
-    
+
+
 class StudentDashboardStatsView(APIView):
     permission_classes = [IsAuthenticated, IsStudent]
 
     def get(self, request):
-        # 1. Отримуємо студента з усіма потрібними зв'язками одним махом
         student = get_object_or_404(
             Student.objects.select_related('study_group', 'person'), 
             person__user=request.user
         )
         group = student.study_group
 
-        # 2. Рахуємо особисту статистику
+        # Рахуємо особисту статистику (оцінки)
         task_sum = TaskChecked.objects.filter(student=student).aggregate(s=Sum('mark'))['s'] or 0
         lesson_sum = LessonMark.objects.filter(student=student).aggregate(s=Sum('grade'))['s'] or 0
         total_coins = task_sum + lesson_sum
@@ -703,7 +734,6 @@ class StudentDashboardStatsView(APIView):
                     list(LessonMark.objects.filter(student=student).values_list('grade', flat=True))
         avg_grade = sum(all_marks) / len(all_marks) if all_marks else 0.0
 
-        # 3. Формуємо відповідь
         response_data = {
             "group_name": group.name if group else None,
             "my_stats": {
@@ -714,11 +744,9 @@ class StudentDashboardStatsView(APIView):
             "leaderboard": []
         }
 
-        # 4. Лідерборд рахуємо ТІЛЬКИ якщо є група
         if group:
-            # Оптимізація: використовуємо анотації, щоб порахувати все одним запитом до БД
-            # замість того, щоб робити запити в циклі for
-            group_students = Student.objects.filter(study_group=group).select_related('person').annotate(
+            # Отримуємо студентів групи
+            group_students = Student.objects.filter(study_group=group).select_related('person__user').annotate(
                 task_score=Coalesce(Sum('taskchecked__mark'), Value(0)),
                 lesson_score=Coalesce(Sum('lesson_marks__grade'), Value(0))
             )
@@ -727,7 +755,9 @@ class StudentDashboardStatsView(APIView):
             for s in group_students:
                 s_total_coins = s.task_score + s.lesson_score
                 leaderboard.append({
-                    "id": str(s.id),
+                    # 🔥 КЛЮЧОВЕ ВИПРАВЛЕННЯ ТУТ:
+                    # Передаємо саме ID юзера, щоб спрацював роут профілю /api/profiles/<user_id>/
+                    "id": str(s.person.user.id), 
                     "full_name": s.person.get_full_name(),
                     "coins": s_total_coins,
                     "ducks": s.ducks

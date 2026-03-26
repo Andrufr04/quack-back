@@ -13,7 +13,7 @@ application = ProtocolTypeRouter({
     "http": django_asgi_app,
     "websocket": JwtAuthMiddleware(
         URLRouter([
-            path('ws/notifications/<uuid:group_id>/', NotificationConsumer.as_asgi()),
+            path('ws/notifications/', NotificationConsumer.as_asgi()),
         ])
     ),
 })

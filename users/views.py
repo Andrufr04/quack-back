@@ -115,7 +115,6 @@ class SwitchRoleView(APIView):
         refresh['active_role'] = new_role
         refresh['roles'] = list(user_groups)
         
-        # ДОДАЄМО ТЕ САМЕ СЮДИ
         group_id = None
         if hasattr(user, 'person') and hasattr(user.person, 'student'):
             student = user.person.student

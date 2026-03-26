@@ -12,7 +12,8 @@ urlpatterns = [
     path('api/token/verify/', TokenVerifyView.as_view(), name='token_verify'),
     path('api/users/', include('users.urls')),
     path('api/profiles/', include('profiles.urls')),
-    path('api/education/', include('education.urls'))
+    path('api/education/', include('education.urls')),
+    path('api/notifications/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:

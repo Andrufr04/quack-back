@@ -5,13 +5,12 @@ class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         user = self.scope['user']
 
-        # Якщо токен невалідний або його немає — викидаємо!
         if user.is_anonymous:
             await self.close()
             return
 
-        self.group_id = self.scope['url_route']['kwargs']['group_id']
-        self.room_group_name = f'group_{self.group_id}'
+        # 🔥 Тепер кімната називається user_ID (наприклад user_1)
+        self.room_group_name = f'user_{user.id}'
 
         await self.channel_layer.group_add(
             self.room_group_name,
@@ -27,10 +26,5 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             )
 
     async def send_notification(self, event):
-        message = event['message']
-        task_data = event.get('task_data', {})
-
-        await self.send(text_data=json.dumps({
-            'message': message,
-            'task_data': task_data
-        }))
+        # Відправляємо JSON на фронт
+        await self.send(text_data=json.dumps(event['payload']))

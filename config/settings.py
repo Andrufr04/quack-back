@@ -40,7 +40,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'users',
     'profiles',
-    'education'
+    'education',
+    'notifications',
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + [
