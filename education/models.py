@@ -134,3 +134,25 @@ class LessonMark(models.Model):
 
     class Meta:
         unique_together = ('lesson', 'student') # Одна оцінка для студента за одну пару
+
+class News(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=200)
+    text = models.TextField(max_length=4096)
+    image = models.ImageField(upload_to='news/', null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
+
+class NewsReadStatus(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    news = models.ForeignKey(News, on_delete=models.CASCADE, related_name='read_statuses')
+    
+    # 🔥 Зв'язуємо саме з твоєю моделлю Student
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='read_news') 
+    
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('news', 'student')

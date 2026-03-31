@@ -10,6 +10,8 @@ from django.contrib.auth import get_user_model
 import traceback
 import uuid
 import os
+from rest_framework.exceptions import PermissionDenied
+from PIL import Image
 
 User = get_user_model()
 
@@ -176,7 +178,10 @@ class PostListView(APIView):
         text = request.data.get('text', '')
         images_data = request.FILES.getlist('image')
 
-        if not title and not text and not images_data:
+        is_text_empty = not text.strip()
+        is_title_empty = not title or not title.strip()
+
+        if is_title_empty and is_text_empty and not images_data:
             return Response({"error": "Пост не може бути порожнім"}, status=400)
         
         # 🔥 ВАЛІДАЦІЯ ТЕКСТУ 🔥
@@ -189,6 +194,7 @@ class PostListView(APIView):
 
         # 🔥 ВАЛІДАЦІЯ ФАЙЛІВ 🔥
         limit = 10 * 1024 * 1024  
+        max_resolution = 4096
         
         for img in images_data[:5]: 
             if not img.content_type.startswith('image/'):
@@ -196,12 +202,24 @@ class PostListView(APIView):
             
             if img.size > limit:
                 return Response({"error": f"Файл {img.name} занадто великий (макс. 10 МБ)"}, status=400)
+            
+            try:
+                with Image.open(img) as image_obj:
+                    width, height = image_obj.size
+                    if width > max_resolution or height > max_resolution:
+                        return Response({
+                            "error": f"Зображення {img.name} має розмір {width}x{height}. Максимальний дозволений розмір: 4096x4096 пікселів."
+                        }, status=400)
+            except Exception:
+                return Response({"error": f"Файл {img.name} пошкоджений або не є дійсним зображенням."}, status=400)
+            finally:
+                img.seek(0)
 
         # 1. Створюємо сам пост (тільки якщо всі картинки пройшли перевірку)
         post = Post.objects.create(
             author=request.user,
             title=title,
-            text=text
+            text=text.strip()
         )
 
         # 2. Зберігаємо картинки
@@ -252,3 +270,15 @@ class ReactionToggleView(APIView):
                 print(f"Notification error: {e}")
 
         return Response({"status": "added"})
+    
+class PostDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, post_id):
+        post = get_object_or_404(Post, id=post_id)
+        
+        if post.author != request.user:
+            raise PermissionDenied("Ви не можете видалити чужий пост.")
+            
+        post.delete()
+        return Response({"status": "deleted"}, status=200)

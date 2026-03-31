@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    AdminStudyGroupView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, SetAttendanceView, StudentDashboardStatsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
+    AdminNewsDetailView, AdminNewsView, AdminStudyGroupView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, MarkNewsReadView, SetAttendanceView, StudentDashboardStatsView, StudentNewsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
     TeacherTasksToCheckView, GradeTaskView,
     StudentTasksView, SubmitTaskWorkView, ToggleDuckView, UpdateLessonThemeView
 )
@@ -43,4 +43,9 @@ urlpatterns = [
     path('groups/<uuid:pk>/', AdminStudyGroupView.as_view(), name='admin-group-detail'),
     
     path('student/dashboard-stats/', StudentDashboardStatsView.as_view(), name='student-stats'),
+
+    path('news/admin/', AdminNewsView.as_view(), name='admin-news'),
+    path('news/admin/<uuid:news_id>/', AdminNewsDetailView.as_view(), name='admin-news-detail'),
+    path('news/student/', StudentNewsView.as_view(), name='student-news'),
+    path('news/<uuid:news_id>/read/', MarkNewsReadView.as_view(), name='mark-news-read'),
 ]

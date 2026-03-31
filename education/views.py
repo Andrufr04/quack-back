@@ -8,11 +8,12 @@ from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics
-from django.db.models import Avg, Sum, Value, FloatField, Subquery, OuterRef
+from django.db.models import Avg, Sum, Value, FloatField, Subquery, OuterRef, Exists
 from django.db.models.functions import Coalesce
 from datetime import datetime, timedelta
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from education.serializers import LessonSerializer
 from django.contrib.auth import get_user_model
@@ -20,7 +21,7 @@ from django.contrib.auth import get_user_model
 from notifications.services import create_and_send_notification
 
 from .models import (
-    Attendance, Lesson, LessonDuck, LessonMark, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
+    Attendance, Lesson, LessonDuck, LessonMark, News, NewsReadStatus, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
     Student, StudyGroup, Subject, AttachmentGroup, AttachmentFile, TaskType
 )
 from users.permissions import IsAdministration, IsTeacher, IsStudent, IsCurator
@@ -866,3 +867,123 @@ class CalendarLessonsView(APIView):
             })
         
         return Response(data)
+    
+class AdminNewsView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+    parser_classes = (MultiPartParser, FormParser)
+
+    def get(self, request):
+        news_list = News.objects.all().order_by('-created_at')
+        data = []
+        for n in news_list:
+            data.append({
+                "id": str(n.id),
+                "title": n.title,
+                "text": n.text,
+                "image": request.build_absolute_uri(n.image.url) if n.image else None,
+                "created_at": n.created_at.isoformat(),
+            })
+        return Response(data)
+
+    def post(self, request):
+        title = request.data.get('title')
+        text = request.data.get('text')
+        image = request.FILES.get('image')
+
+        if not title or not text:
+            return Response({"error": "Заголовок і текст обов'язкові."}, status=400)
+        
+        if len(title) > 200 or len(text) > 4096:
+            return Response({"error": "Перевищено ліміт символів."}, status=400)
+
+        news = News.objects.create(title=title, text=text, image=image)
+
+        # 🔥 ВІДПРАВЛЯЄМО СПОВІЩЕННЯ ВСІМ СТУДЕНТАМ 🔥
+        students = Student.objects.select_related('person__user').all()
+        for student in students:
+            if hasattr(student, 'person') and hasattr(student.person, 'user'):
+                try:
+                    create_and_send_notification(
+                        recipient=student.person.user,
+                        title="Нова новина!",
+                        message=news.title,
+                        category='education', 
+                        related_id=str(news.id)
+                    )
+                except Exception as e:
+                    print(f"Помилка відправки сповіщення: {e}")
+
+        return Response({"status": "created", "id": str(news.id)}, status=201)
+    
+class AdminNewsDetailView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+    parser_classes = (MultiPartParser, FormParser)
+
+    def patch(self, request, news_id):
+        news = get_object_or_404(News, id=news_id)
+        
+        title = request.data.get('title')
+        text = request.data.get('text')
+        image = request.FILES.get('image')
+
+        if title:
+            if len(title) > 200: return Response({"error": "Перевищено ліміт"}, status=400)
+            news.title = title
+            
+        if text:
+            if len(text) > 4096: return Response({"error": "Перевищено ліміт"}, status=400)
+            news.text = text
+            
+        if image:
+            news.image = image
+
+        news.save()
+        return Response({"status": "updated"})
+
+    def delete(self, request, news_id):
+        news = get_object_or_404(News, id=news_id)
+        news.delete()
+        return Response({"status": "deleted"})
+
+class StudentNewsView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def get(self, request):
+        student = getattr(request.user.person, 'student', None)
+        if not student:
+            return Response({"error": "Студента не знайдено"}, status=400)
+
+        read_subquery = NewsReadStatus.objects.filter(
+            news=OuterRef('pk'), 
+            student=student
+        )
+
+        news_list = News.objects.annotate(
+            is_read=Exists(read_subquery)
+        ).order_by('-created_at')
+
+        data = []
+        for n in news_list:
+            data.append({
+                "id": str(n.id),
+                "title": n.title,
+                "text": n.text,
+                "image": request.build_absolute_uri(n.image.url) if n.image else None,
+                "created_at": n.created_at.isoformat(),
+                "is_read": n.is_read
+            })
+        return Response(data)
+
+class MarkNewsReadView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def post(self, request, news_id):
+        student = getattr(request.user.person, 'student', None)
+        if not student:
+            return Response({"error": "Студента не знайдено"}, status=400)
+
+        news = get_object_or_404(News, id=news_id)
+        
+        NewsReadStatus.objects.get_or_create(news=news, student=student)
+        
+        return Response({"status": "read"})
