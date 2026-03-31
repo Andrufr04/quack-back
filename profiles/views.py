@@ -243,7 +243,7 @@ class ReactionToggleView(APIView):
                 
                 create_and_send_notification(
                     recipient=post.author,
-                    title="Нова реакція! ✨",
+                    title="Нова реакція!",
                     message=f"{sender_name} відреагував {emoji} на ваш пост.",
                     category='social', # 🔥 Категорія Соціальне!
                     related_id=str(post.id)

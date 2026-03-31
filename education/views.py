@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics
-from django.db.models import Avg, Sum, Value, FloatField
+from django.db.models import Avg, Sum, Value, FloatField, Subquery, OuterRef
 from django.db.models.functions import Coalesce
 from datetime import datetime, timedelta
 from channels.layers import get_channel_layer
@@ -578,12 +578,27 @@ class AdminStudyGroupView(APIView):
     
 # Отримання пар вчителя на сьогодні
 class TeacherLessonsTodayView(APIView):
+    permission_classes = [IsAuthenticated, IsTeacher] # Додали захист
+
     def get(self, request):
-        today = timezone.now().date()
+        # 1. Шукаємо параметр date в URL
+        date_str = request.query_params.get('date')
+        
+        if date_str:
+            try:
+                # Перетворюємо рядок з фронтенду в об'єкт дати
+                target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({"error": "Неправильний формат дати."}, status=400)
+        else:
+            # Якщо параметра немає — беремо сьогодні
+            target_date = timezone.now().date()
+
+        # 2. Фільтруємо пари за цією датою і сортуємо за часом
         lessons = Lesson.objects.filter(
             teacher=request.user,
-            start_time__date=today
-        ).select_related('study_group', 'subject')
+            start_time__date=target_date
+        ).select_related('study_group', 'subject').order_by('start_time')
         
         data = [{
             "id": str(l.id),
@@ -591,8 +606,9 @@ class TeacherLessonsTodayView(APIView):
             "subject_name": l.subject.name,
             "start_time": l.start_time,
             "end_time": l.end_time,
-            "theme": l.theme # Переконайся, що додав це поле в модель Lesson (нижче допишу)
+            "theme": l.theme 
         } for l in lessons]
+        
         return Response(data)
 
 # Студенти групи з їхніми статусами по конкретній парі
@@ -611,6 +627,7 @@ class LessonStudentsView(APIView):
         for s in students:
             data.append({
                 "id": str(s.id),
+                "profile_id": str(s.person.user.id),
                 "full_name": s.person.get_full_name(),
                 "attendance_status": attendance_map.get(s.id, None),
                 "duck_active": s.id in ducks_map,
@@ -672,10 +689,16 @@ class GradeLessonStudentView(APIView):
             defaults={'grade': int(grade_val)}
         )
 
-        # Опціонально: оновлюємо загальний баланс монет студента
-        # (Наприклад, додаємо тільки якщо це нова оцінка, або різницю)
-        # student.coins += int(grade_val) 
-        # student.save()
+        try:
+            create_and_send_notification(
+                recipient=student.person.user,
+                title="Нова оцінка!",
+                message=f"Ви отримали {mark.grade} балів на парі з предмета '{lesson.subject.name}'.",
+                category='education',
+                related_id=str(lesson.id)
+            )
+        except Exception as e:
+            print(f"Помилка відправки сповіщення: {e}")
 
         return Response({"status": "success", "grade": mark.grade})
 
@@ -706,6 +729,17 @@ class ToggleDuckView(APIView):
             LessonDuck.objects.create(lesson=lesson, student=student)
             student.ducks += 1
             active = True
+
+            try:
+                create_and_send_notification(
+                    recipient=student.person.user,
+                    title="Качка за активність!",
+                    message=f"Викладач дав вам заохочення на парі з '{lesson.subject.name}'.",
+                    category='education',
+                    related_id=str(lesson.id)
+                )
+            except Exception as e:
+                print(f"Помилка відправки сповіщення: {e}")
             
         student.save()
         
@@ -745,25 +779,34 @@ class StudentDashboardStatsView(APIView):
         }
 
         if group:
-            # Отримуємо студентів групи
+            tasks_sq = TaskChecked.objects.filter(
+                student=OuterRef('pk')
+            ).values('student').annotate(total=Sum('mark')).values('total')
+
+            lessons_sq = LessonMark.objects.filter(
+                student=OuterRef('pk')
+            ).values('student').annotate(total=Sum('grade')).values('total')
+
             group_students = Student.objects.filter(study_group=group).select_related('person__user').annotate(
-                task_score=Coalesce(Sum('taskchecked__mark'), Value(0)),
-                lesson_score=Coalesce(Sum('lesson_marks__grade'), Value(0))
+                task_score=Coalesce(Subquery(tasks_sq), Value(0)),
+                lesson_score=Coalesce(Subquery(lessons_sq), Value(0))
             )
 
             leaderboard = []
             for s in group_students:
                 s_total_coins = s.task_score + s.lesson_score
+                total_points = s_total_coins + s.ducks # 🔥 СУМУЄМО МОНЕТИ ТА КАЧКИ
+
                 leaderboard.append({
-                    # 🔥 КЛЮЧОВЕ ВИПРАВЛЕННЯ ТУТ:
-                    # Передаємо саме ID юзера, щоб спрацював роут профілю /api/profiles/<user_id>/
                     "id": str(s.person.user.id), 
                     "full_name": s.person.get_full_name(),
                     "coins": s_total_coins,
-                    "ducks": s.ducks
+                    "ducks": s.ducks,
+                    "total_points": total_points # Додаємо нове поле для сортування і фронта
                 })
 
-            response_data["leaderboard"] = sorted(leaderboard, key=lambda x: x['coins'], reverse=True)[:10]
+            # 🔥 СОРТУЄМО ЗА ЗАГАЛЬНОЮ СУМОЮ (total_points)
+            response_data["leaderboard"] = sorted(leaderboard, key=lambda x: x['total_points'], reverse=True)
 
         return Response(response_data)
 
