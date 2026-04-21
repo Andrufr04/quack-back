@@ -513,6 +513,31 @@ class CreateLessonView(APIView):
             task_id=task_id if task_id else None
         )
 
+        try:
+            create_and_send_notification(
+                recipient=lesson.teacher,
+                title="Оновлення розкладу",
+                message=f"Вам призначено нову пару: {lesson.subject.name}",
+                category='education',
+                related_id=str(lesson.id)
+            )
+        except Exception as e:
+            print(f"Помилка сокета вчителя: {e}")
+
+        # 🔥 2. СПОВІЩАЄМО СТУДЕНТІВ (щоб їхні календарі оновилися миттєво) 🔥
+        students = Student.objects.filter(study_group_id=group_id).select_related('person__user')
+        for student in students:
+            try:
+                create_and_send_notification(
+                    recipient=student.person.user,
+                    title="Зміни в розкладі!",
+                    message=f"Додано нову пару: {lesson.subject.name}",
+                    category='education',
+                    related_id=str(lesson.id)
+                )
+            except Exception as e:
+                print(f"Помилка сокета студента: {e}")
+
         return Response({"id": lesson.id, "status": "Lesson created"}, status=201)
 
 # Також знадобиться список усіх вчителів для вибору в селекті
@@ -654,6 +679,9 @@ class SetAttendanceView(APIView):
 
         lesson = get_object_or_404(Lesson, id=lesson_id)
         
+        # 🔥 Дістаємо студента, щоб відправити йому сповіщення
+        student = get_object_or_404(Student, id=student_id)
+        
         # Перевірка часу
         if timezone.now() < lesson.start_time:
             return Response(
@@ -661,10 +689,29 @@ class SetAttendanceView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Перетворюємо статус в число про всяк випадок
+        status_int = int(status_val)
+        
         attendance, created = Attendance.objects.update_or_create(
             lesson_id=lesson_id, student_id=student_id,
-            defaults={'status': status_val}
+            defaults={'status': status_int}
         )
+
+        # 🔥 ВІДПРАВЛЯЄМО СПОВІЩЕННЯ СТУДЕНТУ ПО СОКЕТУ 🔥
+        status_texts = {0: "Відсутній", 1: "Присутній", 2: "Запізнення"}
+        text_status = status_texts.get(status_int, "Невідомо")
+
+        try:
+            create_and_send_notification(
+                recipient=student.person.user,
+                title="Відвідуваність",
+                message=f"Ваш статус на парі '{lesson.subject.name}': {text_status}",
+                category='education',
+                related_id=str(lesson.id)
+            )
+        except Exception as e:
+            print(f"Помилка відправки сповіщення про відвідуваність: {e}")
+
         return Response({"status": "ok"})
 
 # Оцінка за пару + Coins
@@ -856,14 +903,12 @@ class CalendarLessonsView(APIView):
                 "id": str(l.id),
                 "title": l.subject.name,
                 "type": l.lesson_type.name if l.lesson_type else "Заняття",
-                
-                # 3. Використовуємо вже конвертований локальний час
                 "start": local_start.strftime("%H:%M"),
                 "end": local_end.strftime("%H:%M"),
-                
-                # Віддаємо день у форматі, який очікує фронтенд
                 "day": js_day, 
-                "date": local_start.date().isoformat()
+                "date": local_start.date().isoformat(),
+                "classroom": l.classroom,
+                "teacher_id": str(l.teacher.id)
             })
         
         return Response(data)
@@ -987,3 +1032,18 @@ class MarkNewsReadView(APIView):
         NewsReadStatus.objects.get_or_create(news=news, student=student)
         
         return Response({"status": "read"})
+    
+class StudentAttendanceHistoryView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def get(self, request):
+        student = request.user.person.student
+        attendances = Attendance.objects.filter(student=student).select_related('lesson__subject').order_by('-lesson__start_time')[:80]
+        data = [{
+            "id": str(a.id),
+            "subject_name": a.lesson.subject.name,
+            "date": a.lesson.start_time.isoformat(),
+            "status": a.status
+        } for a in reversed(attendances)]
+        
+        return Response(data)

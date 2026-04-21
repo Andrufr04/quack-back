@@ -34,14 +34,12 @@ class Post(models.Model):
     
     title = models.CharField(max_length=255, null=True, blank=True)
     text = models.TextField(null=True, blank=True)
-    # 🔥 ПОЛЕ image ЗВІДСИ ВИДАЛЯЄМО!
     
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-created_at']
 
-# 🔥 НОВА ТАБЛИЦЯ ДЛЯ КАРТИНОК 🔥
 class PostImage(models.Model):
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to=post_image_path)
@@ -61,3 +59,40 @@ class Reaction(models.Model):
 
     class Meta:
         unique_together = ('post', 'user')
+
+class Comment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='comments')
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='comments')
+    
+    # 🔥 Поле для вкладених відповідей
+    parent = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
+    
+    text = models.CharField(max_length=512)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at'] # Спочатку старі, потім нові
+
+class Chat(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    participants = models.ManyToManyField(User, related_name='chats')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+class Message(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE)
+    text = models.CharField(max_length=4096, blank=True, null=True)
+    is_read = models.BooleanField(default=False) # 🔥 ДОДАНО: Статус прочитання
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+class MessageImage(models.Model):
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='images')
+    image = models.ImageField(upload_to='chat_images/')
