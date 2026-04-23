@@ -21,7 +21,7 @@ from django.contrib.auth import get_user_model
 from notifications.services import create_and_send_notification
 
 from .models import (
-    Attendance, Lesson, LessonDuck, LessonMark, News, NewsReadStatus, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
+    Attendance, Lesson, LessonDuck, LessonMark, LessonType, News, NewsReadStatus, Task, TaskStatus, TaskOnCheck, TaskChecked, Teacher, 
     Student, StudyGroup, Subject, AttachmentGroup, AttachmentFile, TaskType
 )
 from users.permissions import IsAdministration, IsTeacher, IsStudent, IsCurator
@@ -1047,3 +1047,84 @@ class StudentAttendanceHistoryView(APIView):
         } for a in reversed(attendances)]
         
         return Response(data)
+    
+class AdminSubjectView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+
+    def get(self, request):
+        subjects = Subject.objects.all().order_by('name')
+        data = [{"id": str(s.id), "name": s.name} for s in subjects]
+        return Response(data)
+
+    def post(self, request):
+        name = request.data.get('name')
+        if not name:
+            return Response({"error": "Назва обов'язкова"}, status=400)
+        Subject.objects.create(name=name)
+        return Response({"status": "created"}, status=201)
+
+    def patch(self, request, pk):
+        subject = get_object_or_404(Subject, pk=pk)
+        if 'name' in request.data:
+            subject.name = request.data['name']
+            subject.save()
+        return Response({"status": "updated"})
+
+    def delete(self, request, pk):
+        subject = get_object_or_404(Subject, pk=pk)
+        subject.delete()
+        return Response({"status": "deleted"})
+    
+class AdminTaskTypeView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+
+    def get(self, request):
+        types = TaskType.objects.all().order_by('name')
+        data = [{"id": str(t.id), "name": t.name} for t in types]
+        return Response(data)
+
+    def post(self, request):
+        name = request.data.get('name')
+        if not name:
+            return Response({"error": "Назва обов'язкова"}, status=400)
+        TaskType.objects.create(name=name)
+        return Response({"status": "created"}, status=201)
+
+    def patch(self, request, pk):
+        task_type = get_object_or_404(TaskType, pk=pk)
+        if 'name' in request.data:
+            task_type.name = request.data['name']
+            task_type.save()
+        return Response({"status": "updated"})
+
+    def delete(self, request, pk):
+        task_type = get_object_or_404(TaskType, pk=pk)
+        task_type.delete()
+        return Response({"status": "deleted"})
+    
+class AdminLessonTypeView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+
+    def get(self, request):
+        types = LessonType.objects.all().order_by('name')
+        data = [{"id": str(t.id), "name": t.name} for t in types]
+        return Response(data)
+
+    def post(self, request):
+        name = request.data.get('name')
+        if not name:
+            return Response({"error": "Назва обов'язкова"}, status=400)
+        LessonType.objects.create(name=name)
+        return Response({"status": "created"}, status=201)
+
+    def patch(self, request, pk):
+        task_type = get_object_or_404(LessonType, pk=pk)
+        if 'name' in request.data:
+            task_type.name = request.data['name']
+            task_type.save()
+        return Response({"status": "updated"})
+
+    def delete(self, request, pk):
+        task_type = get_object_or_404(LessonType, pk=pk)
+        task_type.delete()
+        return Response({"status": "deleted"})

@@ -84,13 +84,17 @@ class TaskChecked(models.Model):
     comment = models.TextField(null=True, blank=True)
     checked_at = models.DateTimeField(auto_now_add=True)
 
+class LessonType(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+
 class Lesson(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     study_group = models.ForeignKey(StudyGroup, on_delete=models.CASCADE, related_name='lessons')
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='lessons')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     theme = models.CharField(max_length=200, blank=True, null=True) 
-    lesson_type = models.ForeignKey(TaskType, on_delete=models.SET_NULL, null=True, blank=True) # Напр. "Лекція"
+    lesson_type = models.ForeignKey(LessonType, on_delete=models.SET_NULL, null=True, blank=True) 
     
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()

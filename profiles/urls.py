@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import ChatListView, ChatMessagesView, CommentDeleteView, CommentListCreateView, GetOrCreateChatView, MyProfileView, PostDeleteView, PostListView, ReactionToggleView, SendMessageView, UserProfileView
+from .views import ChatListView, ChatMessagesView, CommentDeleteView, CommentListCreateView, CreateGroupChatView, GetOrCreateChatView, GroupChatManageView, GroupTransferAdminView, MessageReactionToggleView, MyProfileView, PostDeleteView, PostListView, ReactionToggleView, SendMessageView, UserProfileView
 
 urlpatterns = [
     path('my/', MyProfileView.as_view(), name='my-profile'),
@@ -17,5 +17,9 @@ urlpatterns = [
     path('chats/<uuid:chat_id>/', ChatMessagesView.as_view()),
     path('chats/<uuid:chat_id>/send/', SendMessageView.as_view()),
     path('chats/start/<uuid:user_id>/', GetOrCreateChatView.as_view()),
+    path('chats/group/create/', CreateGroupChatView.as_view()),
+    path('chats/group/<uuid:chat_id>/manage/', GroupChatManageView.as_view()),
+    path('chats/group/<uuid:chat_id>/transfer-admin/', GroupTransferAdminView.as_view()),
+    path('messages/<uuid:message_id>/react/', MessageReactionToggleView.as_view()),
 
 ]

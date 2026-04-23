@@ -2,8 +2,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser
-from notifications.services import create_and_send_notification
-from profiles.models import Chat, Comment, Message, MessageImage, Person, Post, PostImage, Reaction
+from notifications.services import create_and_send_notification, send_ws_message
+from profiles.models import Chat, Comment, Message, MessageImage, MessageReaction, Person, Post, PostImage, Reaction
 from users.permissions import IsTeacher
 from rest_framework.generics import get_object_or_404
 from django.contrib.auth import get_user_model
@@ -378,29 +378,45 @@ class ChatListView(APIView):
         
         data = []
         for chat in chats:
-            other_user = chat.participants.exclude(id=request.user.id).first()
-            if not other_user:
-                continue
-                
-            profile = other_user.person.profile_set.first()
-            avatar = request.build_absolute_uri(profile.profile_picture.url) if profile and profile.profile_picture else None
+            # 🔥 ЛОГІКА ДЛЯ ГРУПОВИХ ЧАТІВ 🔥
+            if chat.is_group:
+                avatar = request.build_absolute_uri(chat.avatar.url) if chat.avatar else None
+                name = chat.name
+                other_user_id = None # Для груп це не має сенсу
             
+            # 🔥 ЛОГІКА ДЛЯ ОСОБИСТИХ ЧАТІВ (залишилась як була) 🔥
+            else:
+                other_user = chat.participants.exclude(id=request.user.id).first()
+                if not other_user: continue
+                profile = other_user.person.profile_set.first()
+                avatar = request.build_absolute_uri(profile.profile_picture.url) if profile and profile.profile_picture else None
+                name = other_user.person.get_full_name()
+                other_user_id = str(other_user.id)
+
             last_message = chat.messages.last()
-            
-            # 🔥 РАХУЄМО НЕПРОЧИТАНІ ПОВІДОМЛЕННЯ (від співрозмовника) 🔥
             unread_count = chat.messages.filter(is_read=False).exclude(sender=request.user).count()
             
+            # Визначаємо текст останнього повідомлення (враховуючи системні)
+            last_msg_text = "Немає повідомлень"
+            if last_message:
+                if last_message.is_system:
+                    last_msg_text = last_message.text
+                elif last_message.text:
+                    last_msg_text = last_message.text
+                elif last_message.images.exists():
+                    last_msg_text = "📷 Фото"
+
             data.append({
                 "id": str(chat.id),
-                "other_user_id": str(other_user.id),
-                "name": other_user.person.get_full_name(),
+                "is_group": chat.is_group, # 👈 передаємо на фронт
+                "other_user_id": other_user_id,
+                "name": name,
                 "avatar": avatar,
-                "last_message": last_message.text if last_message else "Немає повідомлень",
+                "last_message": last_msg_text,
                 "updated_at": chat.updated_at.isoformat(),
-                "unread_count": unread_count # <-- Передаємо на фронт
+                "unread_count": unread_count
             })
             
-        # Сортуємо: чати з останніми повідомленнями зверху
         data.sort(key=lambda x: x['updated_at'], reverse=True)
         return Response(data)
 
@@ -410,43 +426,51 @@ class ChatMessagesView(APIView):
     def get(self, request, chat_id):
         chat = get_object_or_404(Chat, id=chat_id, participants=request.user)
 
-        # Отримуємо зсув для підвантаження історії (скрол вгору)
         offset = int(request.query_params.get('offset', 0))
 
-        # 1. Знаходимо непрочитані повідомлення від співрозмовника
         unread_msgs = chat.messages.filter(is_read=False).exclude(sender=request.user)
         unread_count = unread_msgs.count()
 
-        # 2. Знаходимо ID ПЕРШОГО непрочитаного (тільки при першому завантаженні)
         first_unread_id = None
         if offset == 0 and unread_count > 0:
             first_unread = unread_msgs.order_by('created_at').first()
             first_unread_id = str(first_unread.id) if first_unread else None
 
-        # 3. Відмічаємо їх як прочитані
         unread_msgs.update(is_read=True)
 
-        # 4. Визначаємо ліміт (за замовчуванням 20). 
-        # Але якщо у нас 35 непрочитаних, то віддаємо їх всі + 10 старих для контексту
         limit = 20
         if offset == 0 and unread_count > 20:
             limit = unread_count + 10
 
-        # 5. Завантажуємо з бази
-        messages_qs = chat.messages.select_related('sender__person').prefetch_related('images').order_by('-created_at')[offset:offset+limit]
-
-        # Перевертаємо, щоб повідомлення йшли зверху вниз (хронологічно)
+        # 🔥 ОНОВЛЕННЯ 1: Додаємо 'reactions' у prefetch_related
+        messages_qs = chat.messages.select_related('sender__person').prefetch_related('images', 'reactions').order_by('-created_at')[offset:offset+limit]
         messages_list = list(messages_qs)[::-1]
 
         data = []
         for msg in messages_list:
             images = [request.build_absolute_uri(img.image.url) for img in msg.images.all()]
+            
+            reactions_count = {}
+            my_reaction = None
+            for r in msg.reactions.all():
+                reactions_count[r.emoji] = reactions_count.get(r.emoji, 0) + 1
+                if r.user_id == request.user.id:
+                    my_reaction = r.emoji
+
+            profile = msg.sender.person.profile_set.first()
+            avatar_url = request.build_absolute_uri(profile.profile_picture.url) if profile and profile.profile_picture else None
+                    
             data.append({
                 "id": str(msg.id),
                 "sender_id": str(msg.sender.id),
+                "sender_name": msg.sender.person.get_full_name(), # 👈 ДОДАНО
+                "sender_avatar": avatar_url, # 👈 ДОДАНО
                 "text": msg.text,
                 "images": images,
-                "created_at": msg.created_at.isoformat()
+                "created_at": msg.created_at.isoformat(),
+                "reactions": reactions_count,
+                "my_reaction": my_reaction,
+                "is_system": msg.is_system
             })
 
         has_more = chat.messages.count() > (offset + limit)
@@ -503,16 +527,212 @@ class GetOrCreateChatView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, user_id):
-        # Шукаємо або створюємо чат між request.user та user_id
         target_user = get_object_or_404(User, id=user_id)
         if target_user == request.user:
             return Response({"error": "Неможливо створити чат із собою"}, status=400)
 
-        # Шукаємо спільний чат
-        chat = Chat.objects.filter(participants=request.user).filter(participants=target_user).first()
+        chat = Chat.objects.filter(is_group=False).filter(participants=request.user).filter(participants=target_user).first()
         
         if not chat:
-            chat = Chat.objects.create()
+            chat = Chat.objects.create(is_group=False)
             chat.participants.add(request.user, target_user)
             
         return Response({"chat_id": str(chat.id)})
+
+class MessageReactionToggleView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, message_id):
+        emoji = request.data.get('emoji')
+        message = get_object_or_404(Message, id=message_id)
+        user = request.user
+        
+        if not message.chat.participants.filter(id=user.id).exists():
+            return Response({"error": "No access"}, status=403)
+
+        existing_reaction = MessageReaction.objects.filter(message=message, user=user).first()
+
+        if existing_reaction:
+            if existing_reaction.emoji == emoji:
+                existing_reaction.delete()
+            else:
+                existing_reaction.emoji = emoji
+                existing_reaction.save()
+        else:
+            MessageReaction.objects.create(message=message, user=user, emoji=emoji)
+
+        # 1. Збираємо актуальні реакції
+        reactions_qs = MessageReaction.objects.filter(message=message)
+        reactions_count = {}
+        for r in reactions_qs:
+            reactions_count[r.emoji] = reactions_count.get(r.emoji, 0) + 1
+
+        # 2. 🔥 ВІДПРАВЛЯЄМО РЕАЛЬНОЧАСОВЕ ОНОВЛЕННЯ ДЛЯ ВІДКРИТОГО ЧАТУ 🔥
+        other_users = message.chat.participants.exclude(id=user.id)
+        for u in other_users:
+            payload = {
+                'type': 'reaction_update',
+                'chat_id': str(message.chat.id),
+                'message_id': str(message.id),
+                'reactions': reactions_count
+            }
+            
+            # 🔥 Тост показуємо ТІЛЬКИ якщо юзер, якому шлемо івент, є автором повідомлення
+            if message.sender == u:
+                payload['category'] = 'social'
+                payload['related_object_id'] = str(message.chat.id)
+                payload['message'] = f"{user.person.get_full_name()} відреагував {emoji} на ваше повідомлення."
+                
+            send_ws_message(u, payload)
+
+        return Response({"status": "ok"})
+    
+class CreateGroupChatView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        name = request.data.get('name')
+        participant_ids = request.data.get('participants', []) # Список ID юзерів
+
+        if not name:
+            return Response({"error": "Назва групи обов'язкова"}, status=400)
+        
+        # Створюємо чат
+        chat = Chat.objects.create(
+            is_group=True,
+            name=name,
+            admin=request.user
+        )
+        
+        # Додаємо адміна та інших учасників
+        chat.participants.add(request.user)
+        if participant_ids:
+            users_to_add = User.objects.filter(id__in=participant_ids)
+            chat.participants.add(*users_to_add)
+
+        # Створюємо системне повідомлення
+        admin_name = request.user.person.get_full_name()
+        Message.objects.create(
+            chat=chat, sender=request.user, 
+            text=f"{admin_name} створив(ла) групу «{name}»", is_system=True
+        )
+
+        return Response({"chat_id": str(chat.id)}, status=201)
+    
+class GroupChatManageView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, chat_id):
+        # Отримати список учасників (доступно всім у групі)
+        chat = get_object_or_404(Chat, id=chat_id, is_group=True, participants=request.user)
+        participants = chat.participants.select_related('person')
+        
+        data = []
+        for p in participants:
+            profile = p.person.profile_set.first()
+            data.append({
+                "id": str(p.id),
+                "name": p.person.get_full_name(),
+                "avatar": request.build_absolute_uri(profile.profile_picture.url) if profile and profile.profile_picture else None,
+                "is_admin": p == chat.admin
+            })
+        return Response({"participants": data})
+
+    def post(self, request, chat_id):
+        # ДОДАТИ УЧАСНИКА (Доступно тільки адміну)
+        chat = get_object_or_404(Chat, id=chat_id, is_group=True)
+        if chat.admin != request.user:
+            return Response({"error": "Тільки адміністратор може додавати учасників"}, status=403)
+
+        user_id = request.data.get('user_id')
+        new_user = get_object_or_404(User, id=user_id)
+
+        if not chat.participants.filter(id=new_user.id).exists():
+            chat.participants.add(new_user)
+            
+            # Системне повідомлення
+            msg = Message.objects.create(
+                chat=chat, sender=request.user, 
+                text=f"{request.user.person.get_full_name()} додав(ла) {new_user.person.get_full_name()}", 
+                is_system=True
+            )
+            # Сповіщаємо всіх через сокети, що з'явилось повідомлення (щоб оновити чат)
+            for u in chat.participants.exclude(id=request.user.id):
+                send_ws_message(u, {'type': 'new_message', 'chat_id': str(chat.id)})
+
+        return Response({"status": "added"})
+
+    def delete(self, request, chat_id):
+        # ВИДАЛИТИ УЧАСНИКА АБО ВИЙТИ САМОМУ
+        chat = get_object_or_404(Chat, id=chat_id, is_group=True)
+        target_user_id = request.data.get('user_id') # Кого видаляємо
+        
+        # Якщо user_id не передано, значить юзер хоче вийти сам
+        if not target_user_id or str(target_user_id) == str(request.user.id):
+            target_user = request.user
+            sys_text = f"{target_user.person.get_full_name()} покинув(ла) групу"
+        else:
+            # Видаляємо іншого (тільки адмін)
+            if chat.admin != request.user:
+                return Response({"error": "Тільки адміністратор може видаляти учасників"}, status=403)
+            target_user = get_object_or_404(User, id=target_user_id)
+            sys_text = f"{request.user.person.get_full_name()} вилучив(ла) {target_user.person.get_full_name()}"
+
+        if chat.participants.filter(id=target_user.id).exists():
+            chat.participants.remove(target_user)
+            
+            Message.objects.create(
+                chat=chat, sender=request.user, 
+                text=sys_text, is_system=True
+            )
+            
+            for u in chat.participants.all():
+                send_ws_message(u, {'type': 'new_message', 'chat_id': str(chat.id)})
+
+        return Response({"status": "removed"})
+    
+    def patch(self, request, chat_id):
+        chat = get_object_or_404(Chat, id=chat_id, is_group=True)
+        if chat.admin != request.user:
+            return Response({"error": "Тільки адміністратор"}, status=403)
+
+        name = request.data.get('name')
+        avatar = request.FILES.get('avatar')
+
+        if name:
+            chat.name = name[:64] # Валідація
+            
+            Message.objects.create(
+                chat=chat, sender=request.user, 
+                text=f"{request.user.person.get_full_name()} змінив(ла) назву групи на «{chat.name}»", is_system=True
+            )
+
+        if avatar:
+            chat.avatar = avatar
+            
+        chat.save()
+        return Response({"status": "updated"})
+
+class GroupTransferAdminView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, chat_id):
+        chat = get_object_or_404(Chat, id=chat_id, is_group=True)
+        if chat.admin != request.user:
+            return Response({"error": "Тільки адміністратор"}, status=403)
+
+        new_admin_id = request.data.get('user_id')
+        new_admin = get_object_or_404(User, id=new_admin_id)
+
+        if not chat.participants.filter(id=new_admin.id).exists():
+            return Response({"error": "Користувач не в групі"}, status=400)
+
+        chat.admin = new_admin
+        chat.save()
+
+        Message.objects.create(
+            chat=chat, sender=request.user, 
+            text=f"{new_admin.person.get_full_name()} тепер адміністратор", is_system=True
+        )
+
+        return Response({"status": "transferred"})

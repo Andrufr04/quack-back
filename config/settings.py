@@ -49,8 +49,15 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    os.environ.get("CORS_ALLOWED_URL")
+    "http://localhost",             # Дозвіл для Android Capacitor
+    "https://localhost",            # Дозвіл для Android Capacitor
+    "capacitor://localhost",        # Дозвіл для iOS Capacitor
+    "https://quackdemo.duckdns.org" # Дозвіл для твого веб-сайту
 ]
+
+env_cors_url = os.environ.get("CORS_ALLOWED_URL")
+if env_cors_url and env_cors_url not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(env_cors_url)
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',

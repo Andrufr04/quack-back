@@ -79,6 +79,11 @@ class Chat(models.Model):
     participants = models.ManyToManyField(User, related_name='chats')
     updated_at = models.DateTimeField(auto_now=True)
 
+    is_group = models.BooleanField(default=False)
+    name = models.CharField(max_length=255, null=True, blank=True)
+    avatar = models.ImageField(upload_to='chat_avatars/', null=True, blank=True)
+    admin = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='administered_groups')
+
     class Meta:
         ordering = ['-updated_at']
 
@@ -87,8 +92,10 @@ class Message(models.Model):
     chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name='messages')
     sender = models.ForeignKey(User, on_delete=models.CASCADE)
     text = models.CharField(max_length=4096, blank=True, null=True)
-    is_read = models.BooleanField(default=False) # 🔥 ДОДАНО: Статус прочитання
+    is_read = models.BooleanField(default=False)
+    is_system = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
 
     class Meta:
         ordering = ['created_at']
@@ -96,3 +103,11 @@ class Message(models.Model):
 class MessageImage(models.Model):
     message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='chat_images/')
+
+class MessageReaction(models.Model):
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name='reactions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    emoji = models.CharField(max_length=10, choices=Reaction.EMOJI_CHOICES)
+
+    class Meta:
+        unique_together = ('message', 'user')

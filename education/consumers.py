@@ -9,7 +9,6 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
-        # 🔥 Тепер кімната називається user_ID (наприклад user_1)
         self.room_group_name = f'user_{user.id}'
 
         await self.channel_layer.group_add(
@@ -26,5 +25,4 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             )
 
     async def send_notification(self, event):
-        # Відправляємо JSON на фронт
         await self.send(text_data=json.dumps(event['payload']))

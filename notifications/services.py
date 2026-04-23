@@ -1,6 +1,6 @@
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
-from .models import Notification # або звідки ти імпортуєш модель
+from .models import Notification
 
 def create_and_send_notification(recipient, title, message, category='education', related_id=None):
     # 1. Зберігаємо в базу (щоб була історія)
@@ -30,6 +30,18 @@ def create_and_send_notification(recipient, title, message, category='education'
         room_name,
         {
             'type': 'send_notification',
+            'payload': payload
+        }
+    )
+
+def send_ws_message(recipient, payload):
+    channel_layer = get_channel_layer()
+    room_name = f'user_{recipient.id}'
+    
+    async_to_sync(channel_layer.group_send)(
+        room_name,
+        {
+            'type': 'send_notification', 
             'payload': payload
         }
     )

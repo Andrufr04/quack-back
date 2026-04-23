@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    AdminNewsDetailView, AdminNewsView, AdminStudyGroupView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, MarkNewsReadView, SetAttendanceView, StudentAttendanceHistoryView, StudentDashboardStatsView, StudentNewsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
+    AdminLessonTypeView, AdminNewsDetailView, AdminNewsView, AdminStudyGroupView, AdminSubjectView, AdminTaskTypeView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, MarkNewsReadView, SetAttendanceView, StudentAttendanceHistoryView, StudentDashboardStatsView, StudentNewsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
     TeacherTasksToCheckView, GradeTaskView,
     StudentTasksView, SubmitTaskWorkView, ToggleDuckView, UpdateLessonThemeView
 )
@@ -49,4 +49,13 @@ urlpatterns = [
     path('news/admin/<uuid:news_id>/', AdminNewsDetailView.as_view(), name='admin-news-detail'),
     path('news/student/', StudentNewsView.as_view(), name='student-news'),
     path('news/<uuid:news_id>/read/', MarkNewsReadView.as_view(), name='mark-news-read'),
+
+    path('admin-subjects/', AdminSubjectView.as_view()),
+    path('admin-subjects/<uuid:pk>/', AdminSubjectView.as_view()),
+    
+    path('admin-task-types/', AdminTaskTypeView.as_view()),
+    path('admin-task-types/<uuid:pk>/', AdminTaskTypeView.as_view()),
+
+    path('admin-lesson-types/', AdminLessonTypeView.as_view()),
+    path('admin-lesson-types/<uuid:pk>/', AdminLessonTypeView.as_view()),
 ]
