@@ -31,6 +31,10 @@ class Student(models.Model):
 class Subject(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=150)
+    image = models.ImageField(upload_to='subjects/', null=True, blank=True)
+
+    def __str__(self):
+        return self.name
 
 class Teacher(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -83,6 +87,8 @@ class TaskChecked(models.Model):
     mark = models.IntegerField()
     comment = models.TextField(null=True, blank=True)
     checked_at = models.DateTimeField(auto_now_add=True)
+    text = models.TextField(null=True, blank=True)
+    attachments = models.ForeignKey(AttachmentGroup, on_delete=models.SET_NULL, null=True, blank=True)
 
 class LessonType(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -403,6 +403,8 @@ class ChatListView(APIView):
                     last_msg_text = last_message.text
                 elif last_message.text:
                     last_msg_text = last_message.text
+                elif getattr(last_message, 'voice', None):
+                    last_msg_text = "🎤 Голосове повідомлення"
                 elif last_message.images.exists():
                     last_msg_text = "📷 Фото"
 
@@ -442,7 +444,6 @@ class ChatMessagesView(APIView):
         if offset == 0 and unread_count > 20:
             limit = unread_count + 10
 
-        # 🔥 ОНОВЛЕННЯ 1: Додаємо 'reactions' у prefetch_related
         messages_qs = chat.messages.select_related('sender__person').prefetch_related('images', 'reactions').order_by('-created_at')[offset:offset+limit]
         messages_list = list(messages_qs)[::-1]
 
@@ -463,10 +464,11 @@ class ChatMessagesView(APIView):
             data.append({
                 "id": str(msg.id),
                 "sender_id": str(msg.sender.id),
-                "sender_name": msg.sender.person.get_full_name(), # 👈 ДОДАНО
-                "sender_avatar": avatar_url, # 👈 ДОДАНО
+                "sender_name": msg.sender.person.get_full_name(),
+                "sender_avatar": avatar_url,
                 "text": msg.text,
                 "images": images,
+                "voice": request.build_absolute_uri(msg.voice.url) if getattr(msg, 'voice', None) else None,
                 "created_at": msg.created_at.isoformat(),
                 "reactions": reactions_count,
                 "my_reaction": my_reaction,
@@ -489,9 +491,9 @@ class SendMessageView(APIView):
         chat = get_object_or_404(Chat, id=chat_id, participants=request.user)
         text = request.data.get('text', '').strip()
         images_data = request.FILES.getlist('images')
+        voice_data = request.FILES.get('voice')
 
-        # 🔥 ВАЛІДАЦІЯ 🔥
-        if not text and not images_data:
+        if not text and not images_data and not voice_data:
             return Response({"error": "Повідомлення не може бути порожнім"}, status=400)
         if len(text) > 4096:
             return Response({"error": "Перевищено ліміт 4096 символів"}, status=400)
@@ -502,15 +504,14 @@ class SendMessageView(APIView):
             if not img.content_type.startswith('image/'):
                 return Response({"error": f"Файл {img.name} не є зображенням!"}, status=400)
 
-        # Створення
-        message = Message.objects.create(chat=chat, sender=request.user, text=text)
+        message = Message.objects.create(chat=chat, sender=request.user, text=text, voice=voice_data)
+
         for img in images_data:
             MessageImage.objects.create(message=message, image=img)
             
         chat.updated_at = timezone.now()
         chat.save()
 
-        # 🔥 СОКЕТИ: Повідомляємо співрозмовника 🔥
         other_users = chat.participants.exclude(id=request.user.id)
         for u in other_users:
             try:

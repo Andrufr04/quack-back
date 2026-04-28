@@ -162,10 +162,11 @@ class TeacherPendingTasksView(APIView):
                      "id": str(s.attachments.id),
                      "files": [{"id": str(f.id), "file": request.build_absolute_uri(f.file.url)} for f in s.attachments.files.all()]
                 } if s.attachments else None,
-                "task": { # ЦЕ ТЕ, ЩО МИ ДОДАВАЛИ В ІНТЕРФЕЙС
+                "task": {
                     "id": str(s.task.id),
                     "theme": s.task.theme,
                     "subject_name": s.task.subject.name,
+                    "subject_image": request.build_absolute_uri(s.task.subject.image.url) if s.task.subject.image else None, # 🔥 ДОДАТИ ЦЕ
                     "description": s.task.description,
                     "start": s.task.start.isoformat(),
                     "end": s.task.end.isoformat(),
@@ -191,7 +192,9 @@ class GradeTaskView(APIView):
                 task=submission.task,
                 student=submission.student,
                 mark=mark,
-                comment=comment
+                comment=comment,
+                text=submission.text,
+                attachments=submission.attachments
             )
             
             TaskStatus.objects.filter(
@@ -199,15 +202,12 @@ class GradeTaskView(APIView):
                 student=submission.student
             ).update(status=2)
             
-            # 🔥 Зберігаємо дані для сповіщення ПЕРЕД тим, як видалити submission
             student_user = submission.student.person.user
             task_theme = submission.task.theme
             task_id = submission.task.id
             
-            # Видаляємо з черги на перевірку
             submission.delete()
             
-            # 🔥 ВІДПРАВЛЯЄМО СПОВІЩЕННЯ СТУДЕНТУ 🔥
             try:
                 create_and_send_notification(
                     recipient=student_user,
@@ -261,6 +261,7 @@ class StudentTasksView(APIView):
                         "theme": task_obj.theme,
                         "author_name": task_obj.author.get_full_name() or task_obj.author.username,
                         "subject_name": task_obj.subject.name,
+                        "subject_image": request.build_absolute_uri(task_obj.subject.image.url) if task_obj.subject.image else None, # 🔥 ДОДАТИ ЦЕ
                         "description": task_obj.description or "",
                         "task_type_name": task_obj.task_type.name if task_obj.task_type else None,
                         "start": task_obj.start.isoformat() if task_obj.start else None,
@@ -269,14 +270,39 @@ class StudentTasksView(APIView):
                     },
                     "status": s.status,
                     "mark": None,
-                    "comment": None
+                    "comment": None,
+                    "submitted_text": None,          # 🔥 ДОДАНО
+                    "submitted_attachments": None    # 🔥 ДОДАНО
                 }
+
+                # 🔥 ДОДАНО: Якщо статус "На перевірці", дістаємо відповідь студента
+                if s.status == 1:
+                    submission = TaskOnCheck.objects.filter(task=task_obj, student=student).first()
+                    if submission:
+                        task_data["submitted_text"] = submission.text
+                        if submission.attachments:
+                            task_data["submitted_attachments"] = {
+                                "id": str(submission.attachments.id),
+                                "files": [
+                                    {"id": str(f.id), "file": request.build_absolute_uri(f.file.url)} 
+                                    for f in submission.attachments.files.all()
+                                ]
+                            }
 
                 if s.status == 2:
                     check_info = TaskChecked.objects.filter(task=task_obj, student=student).first()
                     if check_info:
                         task_data["mark"] = check_info.mark
                         task_data["comment"] = check_info.comment
+                        task_data["submitted_text"] = check_info.text
+                        if check_info.attachments:
+                            task_data["submitted_attachments"] = {
+                                "id": str(check_info.attachments.id),
+                                "files": [
+                                    {"id": str(f.id), "file": request.build_absolute_uri(f.file.url)} 
+                                    for f in check_info.attachments.files.all()
+                                ]
+                            }
 
                 output.append(task_data)
             return Response(output)
@@ -344,7 +370,8 @@ class TeacherTasksToCheckView(APIView):
                 'student__person__user', 
                 'student__study_group', 
                 'task__subject',
-                'attachments'
+                'attachments',
+                'task__attachments' # 🔥 ОПТИМІЗАЦІЯ: підвантажуємо файли завдання
             )
 
             if group_name and group_name != "Всі":
@@ -353,21 +380,32 @@ class TeacherTasksToCheckView(APIView):
             output = []
 
             for work in query:
-                # Виправлений блок обробки файлів студента
+                # Обробка файлів студента
                 attachments_data = None
                 if work.attachments:
                     files_list = []
                     for f in work.attachments.files.all():
-                        file_url = request.build_absolute_uri(f.file.url)
-                        
                         files_list.append({
                             "id": str(f.id),
-                            "file": file_url
+                            "file": request.build_absolute_uri(f.file.url)
                         })
-                    
                     attachments_data = {
                         "id": str(work.attachments.id),
                         "files": files_list
+                    }
+
+                # 🔥 ДОДАНО: Обробка файлів викладача (оригінального завдання) 🔥
+                teacher_attachments_data = None
+                if work.task.attachments:
+                    t_files_list = []
+                    for f in work.task.attachments.files.all():
+                        t_files_list.append({
+                            "id": str(f.id),
+                            "file": request.build_absolute_uri(f.file.url)
+                        })
+                    teacher_attachments_data = {
+                        "id": str(work.task.attachments.id),
+                        "files": t_files_list
                     }
 
                 s = work.student
@@ -387,9 +425,11 @@ class TeacherTasksToCheckView(APIView):
                         "id": str(work.task.id),
                         "theme": work.task.theme,
                         "subject_name": work.task.subject.name,
+                        "subject_image": request.build_absolute_uri(work.task.subject.image.url) if work.task.subject.image else None, # 🔥 ДОДАТИ ЦЕ
                         "description": work.task.description or "",
                         "start": work.task.start.isoformat() if work.task.start else None,
                         "end": work.task.end.isoformat() if work.task.end else None,
+                        "attachments": teacher_attachments_data # 🔥 ТЕПЕР ФАЙЛИ ВИКЛАДАЧА ВІДПРАВЛЯЮТЬСЯ
                     }
                 })
 
@@ -816,6 +856,37 @@ class StudentDashboardStatsView(APIView):
                     list(LessonMark.objects.filter(student=student).values_list('grade', flat=True))
         avg_grade = sum(all_marks) / len(all_marks) if all_marks else 0.0
 
+        # 🔥 ДОДАНО: Формуємо список останніх оцінок 🔥
+        recent_grades = []
+        
+        # Оцінки за завдання
+        task_marks = TaskChecked.objects.filter(student=student).select_related('task__subject').order_by('-checked_at')[:15]
+        for tm in task_marks:
+            recent_grades.append({
+                "id": f"task_{tm.id}",
+                "type": "Завдання",
+                "grade": tm.mark,
+                "subject": tm.task.subject.name,
+                "theme": tm.task.theme,
+                "date": tm.checked_at.isoformat()
+            })
+            
+        # Оцінки за пари
+        lesson_marks = LessonMark.objects.filter(student=student).select_related('lesson__subject').order_by('-lesson__start_time')[:15]
+        for lm in lesson_marks:
+            recent_grades.append({
+                "id": f"lesson_{lm.id}",
+                "type": "Пара",
+                "grade": lm.grade,
+                "subject": lm.lesson.subject.name,
+                "theme": lm.lesson.theme or "Робота на уроці",
+                "date": lm.lesson.start_time.isoformat()
+            })
+            
+        # Сортуємо об'єднаний список за датою (найновіші перші) і беремо топ 15
+        recent_grades.sort(key=lambda x: x['date'], reverse=True)
+        recent_grades = recent_grades[:15]
+
         response_data = {
             "group_name": group.name if group else None,
             "my_stats": {
@@ -823,6 +894,7 @@ class StudentDashboardStatsView(APIView):
                 "coins": total_coins,
                 "average_grade": round(float(avg_grade), 1)
             },
+            "recent_grades": recent_grades, # 🔥 Віддаємо на фронтенд
             "leaderboard": []
         }
 
@@ -843,17 +915,16 @@ class StudentDashboardStatsView(APIView):
             leaderboard = []
             for s in group_students:
                 s_total_coins = s.task_score + s.lesson_score
-                total_points = s_total_coins + s.ducks # 🔥 СУМУЄМО МОНЕТИ ТА КАЧКИ
+                total_points = s_total_coins + s.ducks 
 
                 leaderboard.append({
                     "id": str(s.person.user.id), 
                     "full_name": s.person.get_full_name(),
                     "coins": s_total_coins,
                     "ducks": s.ducks,
-                    "total_points": total_points # Додаємо нове поле для сортування і фронта
+                    "total_points": total_points
                 })
 
-            # 🔥 СОРТУЄМО ЗА ЗАГАЛЬНОЮ СУМОЮ (total_points)
             response_data["leaderboard"] = sorted(leaderboard, key=lambda x: x['total_points'], reverse=True)
 
         return Response(response_data)
@@ -1050,24 +1121,36 @@ class StudentAttendanceHistoryView(APIView):
     
 class AdminSubjectView(APIView):
     permission_classes = [IsAuthenticated, IsAdministration]
+    parser_classes = (MultiPartParser, FormParser) # 🔥 ДОДАНО ДЛЯ ФАЙЛІВ
 
     def get(self, request):
         subjects = Subject.objects.all().order_by('name')
-        data = [{"id": str(s.id), "name": s.name} for s in subjects]
+        data = [{
+            "id": str(s.id), 
+            "name": s.name,
+            "image": request.build_absolute_uri(s.image.url) if s.image else None # 🔥 ВІДДАЄМО КАРТИНКУ
+        } for s in subjects]
         return Response(data)
 
     def post(self, request):
         name = request.data.get('name')
+        image = request.FILES.get('image') # 🔥 ДОДАНО
+
         if not name:
             return Response({"error": "Назва обов'язкова"}, status=400)
-        Subject.objects.create(name=name)
+            
+        Subject.objects.create(name=name, image=image)
         return Response({"status": "created"}, status=201)
 
     def patch(self, request, pk):
         subject = get_object_or_404(Subject, pk=pk)
+        
         if 'name' in request.data:
             subject.name = request.data['name']
-            subject.save()
+        if 'image' in request.FILES: # 🔥 ДОДАНО
+            subject.image = request.FILES.get('image')
+            
+        subject.save()
         return Response({"status": "updated"})
 
     def delete(self, request, pk):
@@ -1128,3 +1211,165 @@ class AdminLessonTypeView(APIView):
         task_type = get_object_or_404(LessonType, pk=pk)
         task_type.delete()
         return Response({"status": "deleted"})
+
+class CuratorDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated, IsCurator]
+
+    def get(self, request):
+        try:
+            # Знаходимо групу, де користувач є куратором
+            group = StudyGroup.objects.filter(curator=request.user).first()
+            if not group:
+                return Response({"error": "Ви не є куратором жодної групи."}, status=404)
+
+            students = Student.objects.filter(study_group=group).select_related('person')
+            
+            # Беремо останні 20 пар (сортуємо від старих до нових для таблиці)
+            lessons = list(Lesson.objects.filter(study_group=group).select_related('subject').order_by('-start_time')[:50])[::-1]
+            
+            # Беремо останні 20 завдань
+            tasks = list(Task.objects.filter(study_group=group).select_related('subject').order_by('-end')[:50])[::-1]
+
+            # Отримуємо всі оцінки та відвідуваність махом
+            attendances = Attendance.objects.filter(lesson__in=lessons)
+            lesson_marks = LessonMark.objects.filter(lesson__in=lessons)
+            task_statuses = TaskStatus.objects.filter(task__in=tasks)
+            task_checks = TaskChecked.objects.filter(task__in=tasks)
+
+            # Робимо мапи для швидкого доступу
+            att_map = {(a.student_id, a.lesson_id): a.status for a in attendances}
+            lm_map = {(m.student_id, m.lesson_id): m.grade for m in lesson_marks}
+            ts_map = {(ts.student_id, ts.task_id): ts.status for ts in task_statuses}
+            tc_map = {(tc.student_id, tc.task_id): tc.mark for tc in task_checks}
+
+            students_data = []
+            for s in students:
+                # Середній бал за пари
+                s_lm = [m.grade for m in lesson_marks if m.student_id == s.id]
+                lesson_avg = sum(s_lm) / len(s_lm) if s_lm else 0
+
+                # Середній бал за завдання
+                s_tm = [tc.mark for tc in task_checks if tc.student_id == s.id]
+                task_avg = sum(s_tm) / len(s_tm) if s_tm else 0
+
+                # Збираємо комірки пар
+                s_lessons = {}
+                for l in lessons:
+                    s_lessons[str(l.id)] = {
+                        "attendance": att_map.get((s.id, l.id)),
+                        "grade": lm_map.get((s.id, l.id))
+                    }
+
+                # Збираємо комірки завдань
+                s_tasks = {}
+                for t in tasks:
+                    s_tasks[str(t.id)] = {
+                        "status": ts_map.get((s.id, t.id), 0),
+                        "mark": tc_map.get((s.id, t.id))
+                    }
+
+                students_data.append({
+                    "id": str(s.id),
+                    "profile_id": str(s.person.user.id),
+                    "full_name": f"{s.person.name} {s.person.surname}",
+                    "lesson_avg": round(lesson_avg, 1),
+                    "task_avg": round(task_avg, 1),
+                    "lessons": s_lessons,
+                    "tasks": s_tasks
+                })
+
+            return Response({
+                "group_name": group.name,
+                "students": sorted(students_data, key=lambda x: x['full_name']),
+                "lessons_meta": [
+                    {
+                        "id": str(l.id), 
+                        "date": l.start_time.isoformat(), 
+                        "subject": l.subject.name
+                    } for l in lessons
+                ],
+                "tasks_meta": [
+                    {
+                        "id": str(t.id), 
+                        "deadline": t.end.isoformat(), 
+                        "subject": t.subject.name
+                    } for t in tasks
+                ]
+            })
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+        
+class AdminDashboardStatsView(APIView):
+    permission_classes = [IsAuthenticated, IsAdministration]
+
+    def get(self, request):
+        try:
+            group_id = request.query_params.get('group_id')
+            if not group_id:
+                return Response({"error": "Групу не обрано."}, status=400)
+
+            group = get_object_or_404(StudyGroup, id=group_id)
+            students = Student.objects.filter(study_group=group).select_related('person')
+            
+            # Беремо останні 20 пар
+            lessons = list(Lesson.objects.filter(study_group=group).select_related('subject').order_by('-start_time')[:20])[::-1]
+            
+            # Беремо останні 20 завдань
+            tasks = list(Task.objects.filter(study_group=group).select_related('subject').order_by('-end')[:20])[::-1]
+
+            attendances = Attendance.objects.filter(lesson__in=lessons)
+            lesson_marks = LessonMark.objects.filter(lesson__in=lessons)
+            task_statuses = TaskStatus.objects.filter(task__in=tasks)
+            task_checks = TaskChecked.objects.filter(task__in=tasks)
+
+            att_map = {(a.student_id, a.lesson_id): a.status for a in attendances}
+            lm_map = {(m.student_id, m.lesson_id): m.grade for m in lesson_marks}
+            ts_map = {(ts.student_id, ts.task_id): ts.status for ts in task_statuses}
+            tc_map = {(tc.student_id, tc.task_id): tc.mark for tc in task_checks}
+
+            students_data = []
+            for s in students:
+                s_lm = [m.grade for m in lesson_marks if m.student_id == s.id]
+                lesson_avg = sum(s_lm) / len(s_lm) if s_lm else 0
+
+                s_tm = [tc.mark for tc in task_checks if tc.student_id == s.id]
+                task_avg = sum(s_tm) / len(s_tm) if s_tm else 0
+
+                s_lessons = {}
+                for l in lessons:
+                    s_lessons[str(l.id)] = {
+                        "attendance": att_map.get((s.id, l.id)),
+                        "grade": lm_map.get((s.id, l.id))
+                    }
+
+                s_tasks = {}
+                for t in tasks:
+                    s_tasks[str(t.id)] = {
+                        "status": ts_map.get((s.id, t.id), 0),
+                        "mark": tc_map.get((s.id, t.id))
+                    }
+
+                students_data.append({
+                    "id": str(s.id),
+                    "profile_id": str(s.person.user.id),
+                    "full_name": f"{s.person.name} {s.person.surname}",
+                    "lesson_avg": round(lesson_avg, 1),
+                    "task_avg": round(task_avg, 1),
+                    "lessons": s_lessons,
+                    "tasks": s_tasks
+                })
+
+            return Response({
+                "group_name": group.name,
+                "students": sorted(students_data, key=lambda x: x['full_name']),
+                "lessons_meta": [
+                    {"id": str(l.id), "date": l.start_time.isoformat(), "subject": l.subject.name} for l in lessons
+                ],
+                "tasks_meta": [
+                    {"id": str(t.id), "deadline": t.end.isoformat(), "subject": t.subject.name} for t in tasks
+                ]
+            })
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)

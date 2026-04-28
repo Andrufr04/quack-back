@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    AdminLessonTypeView, AdminNewsDetailView, AdminNewsView, AdminStudyGroupView, AdminSubjectView, AdminTaskTypeView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, MarkNewsReadView, SetAttendanceView, StudentAttendanceHistoryView, StudentDashboardStatsView, StudentNewsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
+    AdminDashboardStatsView, AdminLessonTypeView, AdminNewsDetailView, AdminNewsView, AdminStudyGroupView, AdminSubjectView, AdminTaskTypeView, AllGroupsView, AllTeachersView, CalendarLessonsView, CreateLessonView, CreateTaskView, CuratorDashboardStatsView, GradeLessonStudentView, LessonDetailView, LessonListFilteringView, LessonStudentsView, MarkNewsReadView, SetAttendanceView, StudentAttendanceHistoryView, StudentDashboardStatsView, StudentNewsView, TasksTypeView, TeacherCurrentLessonView, TeacherGroupsView, TeacherLessonsTodayView, TeacherSubjectsView, 
     TeacherTasksToCheckView, GradeTaskView,
     StudentTasksView, SubmitTaskWorkView, ToggleDuckView, UpdateLessonThemeView
 )
@@ -26,6 +26,9 @@ urlpatterns = [
     path('grade-student/', GradeLessonStudentView.as_view()),
 
     path('calendar/lessons/', CalendarLessonsView.as_view(), name='calendar-lessons'),
+
+    path('curator/dashboard-stats/', CuratorDashboardStatsView.as_view(), name='curator-stats'),
+    path('admin/dashboard-stats/', AdminDashboardStatsView.as_view(), name='admin-stats'),
 
     # Завдання (Student)
     path('tasks/my-tasks/', StudentTasksView.as_view(), name='student-tasks'),

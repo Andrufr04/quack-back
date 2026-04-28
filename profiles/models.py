@@ -92,6 +92,7 @@ class Message(models.Model):
     chat = models.ForeignKey(Chat, on_delete=models.CASCADE, related_name='messages')
     sender = models.ForeignKey(User, on_delete=models.CASCADE)
     text = models.CharField(max_length=4096, blank=True, null=True)
+    voice = models.FileField(upload_to='chat_voices/', null=True, blank=True)
     is_read = models.BooleanField(default=False)
     is_system = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
